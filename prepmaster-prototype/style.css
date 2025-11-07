@@ -1,31 +1,47 @@
-/* Custom Styles for PrepMaster Prototype */
+/*==========================================================
+  PrepMaster Prototype CSS
+  Goal: Modern, Simple, High-Contrast, and User-Friendly
+==========================================================*/
 
-/* --- Color Palette --- */
+/* --- 1. Color Palette & Typography --- */
 :root {
-    --pm-primary: #34495e; /* Dark Blue/Gray for background/header */
-    --pm-secondary: #f4f4f4; /* Light background for cards */
-    --pm-accent: #e74c3c; /* Reddish for emphasis/alert */
-    --pm-success: #2ecc71; /* Green for success/completion */
-    --pm-danger: #c0392b; /* Dark Red for removal/incomplete */
+    /* Main Branding Colors */
+    --pm-primary: #34495e;     /* Dark Slate Blue/Gray (Headers, Main Buttons) */
+    --pm-secondary: #f4f4f4;   /* Light Gray (Base Body Background) */
+    --pm-accent: #e74c3c;      /* Bright Red/Orange (Emphasis, Alerts, Danger) */
+    
+    /* Functional Colors */
+    --pm-success: #2ecc71;     /* Green (Completion, Sign-off) */
+    --pm-danger: #c0392b;      /* Dark Red (Removal, High-Priority Incomplete) */
+    --pm-info: #3498db;        /* Blue (Audit/Review Links) */
+    
+    /* Text */
+    --pm-text-dark: #2c3e50;
+    --pm-text-light: #ecf0f1;
 }
 
-/* --- Global Elements --- */
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     background-color: var(--pm-secondary);
+    color: var(--pm-text-dark);
 }
 
-/* Custom Background Class */
+/* --- 2. Utility & Background Classes --- */
 .pm-bg-primary {
     background-color: var(--pm-primary) !important;
 }
 
-/* Custom Text Class */
 .pm-text-accent {
-    color: var(--pm-accent);
+    color: var(--pm-accent) !important;
 }
 
-/* --- Buttons and Forms --- */
+.pm-text-light {
+    color: var(--pm-text-light) !important;
+}
+
+/* --- 3. Buttons and Forms --- */
+
+/* Primary Button (Manager Actions) */
 .pm-btn-primary {
     background-color: var(--pm-primary);
     border-color: var(--pm-primary);
@@ -37,36 +53,90 @@ body {
     color: white;
 }
 
+/* Success Button (Employee Sign-off) */
 .pm-btn-success {
     background-color: var(--pm-success);
     border-color: var(--pm-success);
     color: white;
+    transition: all 0.2s;
+}
+.pm-btn-success:hover {
+    background-color: #27ae60;
+    border-color: #27ae60;
 }
 
+/* Danger Button (Remove/High Alert) */
 .pm-btn-danger {
     background-color: var(--pm-danger);
     border-color: var(--pm-danger);
     color: white;
 }
 
-/* Task Completion Style (Used in index.html) */
-.task-done {
-    background-color: var(--pm-success); /* Use a branded color */
-    color: white;
-    text-decoration: line-through;
-    opacity: 0.8;
-}
+/* --- 4. Card & Layout Styling --- */
 
-/* Card Styling */
+/* General Card appearance */
 .card {
     border: none;
     border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1); /* Subtle shadow for modern depth */
+    transition: transform 0.2s;
 }
 
-/* Link Styling */
-a {
-    color: var(--pm-accent);
+/* Hover effect for clickable dashboard cards */
+.card:hover {
+    transform: translateY(-3px);
 }
-a:hover {
-    color: var(--pm-danger);
+
+/* Left border highlight for dashboard cards (visual hierarchy) */
+.card a .card {
+    border-left: 5px solid transparent !important; /* Base for override */
+}
+.border-5 {
+    border-left-width: 5px !important;
+}
+
+/* Custom border colors for dashboard cards */
+.pm-bg-primary-border { border-color: var(--pm-primary) !important; }
+.border-info { border-color: var(--pm-info) !important; }
+.border-danger { border-color: var(--pm-accent) !important; }
+.border-secondary { border-color: #bdc3c7 !important; }
+
+
+/* --- 5. Employee Prep List (index.html) Specific Styles --- */
+
+/* Style for completed tasks */
+.task-done {
+    background-color: var(--pm-success) !important;
+    color: white !important;
+    text-decoration: line-through;
+    opacity: 0.9;
+}
+
+/* Ensures list items have clean padding/spacing */
+.list-group-item {
+    padding: 15px 20px;
+    margin-bottom: 5px;
+    border-radius: 5px;
+    border: 1px solid #e0e0e0;
+    transition: background-color 0.2s;
+}
+
+/* Input fields within the task list */
+.list-group-item input[type="text"],
+.list-group-item select {
+    max-width: 150px;
+}
+
+/* --- 6. Manager Log (manager-log.html) Specific Styles --- */
+
+/* Highlighting the rows for clear status identification */
+.table-success {
+    background-color: #d4edda !important;
+    color: var(--pm-text-dark) !important;
+}
+
+.table-danger {
+    background-color: #f8d7da !important;
+    color: var(--pm-text-dark) !important;
+    font-weight: bold; /* Emphasize failed task */
 }
