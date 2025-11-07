@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PrepMaster - Welcome</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="style.css"> 
+</head>
+<body class="pm-bg-primary d-flex align-items-center justify-content-center" style="min-height: 100vh;">
+    <div class="card p-5 shadow-lg text-center" style="width: 100%; max-width: 400px;">
+        <h1 class="pm-text-accent mb-4">PrepMaster 🔪</h1>
+        <p class="text-muted mb-4">Select your role to continue.</p>
+
+        <div class="mb-4">
+            <h5 class="mb-3">Employee Login</h5>
+            <div class="input-group mb-3">
+                <input type="text" class="form-control" placeholder="Enter Employee ID or Name" aria-label="Employee ID">
+            </div>
+            <a href="dashboard.html" class="btn pm-btn-success w-100">
+                Start Prep Shift
+            </a>
+        </div>
+
+        <div>
+            <h5 class="mb-3">Manager Access</h5>
+            <div class="input-group mb-3">
+                <input type="password" class="form-control" placeholder="Manager Password" aria-label="Manager Password">
+            </div>
+            <a href="dashboard.html?role=manager" class="btn pm-btn-primary w-100">
+                Manager Dashboard
+            </a>
+        </div>
+        
+        <small class="text-muted mt-4">Welcome back!</small>
+    </div>
+</body>
+</html>
