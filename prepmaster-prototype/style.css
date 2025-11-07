@@ -1,1 +1,72 @@
+/* Custom Styles for PrepMaster Prototype */
 
+/* --- Color Palette --- */
+:root {
+    --pm-primary: #34495e; /* Dark Blue/Gray for background/header */
+    --pm-secondary: #f4f4f4; /* Light background for cards */
+    --pm-accent: #e74c3c; /* Reddish for emphasis/alert */
+    --pm-success: #2ecc71; /* Green for success/completion */
+    --pm-danger: #c0392b; /* Dark Red for removal/incomplete */
+}
+
+/* --- Global Elements --- */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: var(--pm-secondary);
+}
+
+/* Custom Background Class */
+.pm-bg-primary {
+    background-color: var(--pm-primary) !important;
+}
+
+/* Custom Text Class */
+.pm-text-accent {
+    color: var(--pm-accent);
+}
+
+/* --- Buttons and Forms --- */
+.pm-btn-primary {
+    background-color: var(--pm-primary);
+    border-color: var(--pm-primary);
+    color: white;
+}
+.pm-btn-primary:hover {
+    background-color: #2c3e50;
+    border-color: #2c3e50;
+    color: white;
+}
+
+.pm-btn-success {
+    background-color: var(--pm-success);
+    border-color: var(--pm-success);
+    color: white;
+}
+
+.pm-btn-danger {
+    background-color: var(--pm-danger);
+    border-color: var(--pm-danger);
+    color: white;
+}
+
+/* Task Completion Style (Used in index.html) */
+.task-done {
+    background-color: var(--pm-success); /* Use a branded color */
+    color: white;
+    text-decoration: line-through;
+    opacity: 0.8;
+}
+
+/* Card Styling */
+.card {
+    border: none;
+    border-radius: 10px;
+}
+
+/* Link Styling */
+a {
+    color: var(--pm-accent);
+}
+a:hover {
+    color: var(--pm-danger);
+}
