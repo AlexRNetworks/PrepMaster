@@ -20,6 +20,15 @@ const MAPPING = {
   'chevron.right': 'chevron-right',
   'fork.knife': 'restaurant',
   'doc.text.fill': 'assignment',
+  'chart.bar.fill': 'bar-chart',
+  'repeat': 'repeat',
+  'gearshape.fill': 'settings',
+  'person.fill': 'person',
+  'checkmark.circle.fill': 'check-circle',
+  'xmark.circle.fill': 'cancel',
+  'clock.fill': 'access-time',
+  'calendar': 'calendar-today',
+  'lock.fill': 'lock',
 } as IconMapping;
 
 /**

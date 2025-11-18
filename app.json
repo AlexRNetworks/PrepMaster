@@ -7,7 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "prepmasterapp",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": true
     },
@@ -42,7 +42,11 @@
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": true
+      "reactCompiler": false
+    },
+    "notification": {
+      "icon": "./assets/images/android-icon-foreground.png",
+      "color": "#0a7ea4"
     }
   }
 }

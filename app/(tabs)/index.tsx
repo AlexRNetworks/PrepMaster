@@ -9,11 +9,13 @@ import {
   SafeAreaView,
   Animated,
   KeyboardAvoidingView,
-  Platform
+  Platform,
+  Image
 } from 'react-native';
 import { useRouter } from 'expo-router';
 
 import { useUser } from '@/context/UserContext';
+import { useLocale } from '@/context/LocaleContext';
 import { db } from '@/lib/firebase';
 import { addDoc, collection, getDocs, onSnapshot, orderBy, query, updateDoc, where } from 'firebase/firestore';
 import EmployeeDashboard from '@/components/EmployeeDashboard';
@@ -78,7 +80,8 @@ const INITIAL_PREP_SCHEDULES: PrepSchedule[] = [
 
 export default function App() {
   const router = useRouter();
-  const { setCurrentUser: setGlobalUser, setAllUsers: setGlobalUsers } = useUser();
+  const { setCurrentUser: setGlobalUser, allUsers: globalUsers } = useUser();
+  const { t } = useLocale();
   const [pin, setPin] = useState('');
   const [currentScreen, setCurrentScreen] = useState('Login');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -90,36 +93,17 @@ export default function App() {
   const fadeAnim = useState(() => new Animated.Value(0))[0];
   const scaleAnim = useState(() => new Animated.Value(0.9))[0];
 
-  // Load users from Firestore
+  // Sync global context users to local state for login screen
   useEffect(() => {
-    const q = query(collection(db, 'users'), orderBy('id', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const loadedUsers: User[] = [];
-      snapshot.forEach((doc) => {
-        const data = doc.data();
-        if (typeof data.id === 'number') {
-          loadedUsers.push({
-            id: data.id,
-            name: data.name || '',
-            pin: data.pin || '',
-            role: data.role || 'Employee',
-            permissions: data.permissions || [],
-            active: data.active !== false,
-            createdAt: data.createdAt || new Date().toISOString(),
-          });
-        }
-      });
-      setUsers(loadedUsers);
-      setGlobalUsers(loadedUsers);
-    });
-
-    return () => unsubscribe();
-  }, [setGlobalUsers]);
+    if (globalUsers.length > 0) {
+      setUsers(globalUsers);
+    }
+  }, [globalUsers]);
 
   // Ensure IT Admin account (PIN 0000) exists and is locked to proper role/name/permissions
   useEffect(() => {
     const ensureItAdmin = async () => {
-      if (!users) return;
+      if (!globalUsers) return;
       try {
         const usersCol = collection(db, 'users');
         // 1) If already have IT_Admin with PIN 0000, we're done
@@ -153,7 +137,7 @@ export default function App() {
         }
 
         // 4) Otherwise create one. Prefer id=1 if it's free; else use next max+1
-        const preferId = users.some(u => u.id === 1) ? Math.max(0, ...users.map(u => u.id)) + 1 : 1;
+        const preferId = globalUsers.some(u => u.id === 1) ? Math.max(0, ...globalUsers.map(u => u.id)) + 1 : 1;
         await addDoc(usersCol, {
           id: preferId,
           name: 'IT Administrator',
@@ -168,7 +152,7 @@ export default function App() {
       }
     };
     ensureItAdmin();
-  }, [users]);
+  }, [globalUsers]);
 
   useEffect(() => {
     if (currentScreen === 'Login') {
@@ -189,19 +173,44 @@ export default function App() {
 
   const handleLogin = () => {
     if (pin.length !== 4) {
-      Alert.alert("Invalid PIN", "Please enter exactly 4 digits.", [{ text: "OK" }]);
+      Alert.alert(t('incorrectPin'), "Please enter exactly 4 digits.", [{ text: "OK" }]);
+      return;
+    }
+
+    // Check if users have loaded yet
+    if (globalUsers.length === 0 && pin !== '0000') {
+      Alert.alert("Loading", "Please wait while user data is being loaded...", [{ text: "OK" }]);
+      return;
+    }
+
+    // Immediate local-admin fallback for PIN 0000
+    if (pin === '0000') {
+      const fallback: User = {
+        id: 1,
+        name: 'IT Administrator',
+        pin: '0000',
+        role: 'IT_Admin',
+        permissions: ['assign_tasks', 'view_logs', 'edit_tasks', 'delete_tasks', 'manage_users', 'view_analytics', 'manage_permissions', 'system_settings'],
+        active: true,
+        createdAt: new Date().toISOString(),
+      };
+      setCurrentUser(fallback);
+      setGlobalUser(fallback);
+      setCurrentScreen('Dashboard');
       return;
     }
 
     setIsLoading(true);
 
     setTimeout(() => {
-      const user = users.find(u => u.pin === pin && u.active);
+      console.log('Login attempt with PIN:', pin);
+      console.log('Available users:', globalUsers.map(u => ({ id: u.id, name: u.name, pin: u.pin, active: u.active })));
+      const user = globalUsers.find(u => u.pin === pin && u.active);
+      console.log('Found user:', user);
       
       if (user) {
         setCurrentUser(user);
         setGlobalUser(user); // Set in global context
-        setGlobalUsers(users); // Set all users in global context
         
         if (user.role === 'IT_Admin' || user.role === 'Manager') {
           Alert.alert(
@@ -339,15 +348,16 @@ export default function App() {
           ]}
         >
           <View style={styles.logoContainer}>
-            <View style={styles.logoCircle}>
-              <Text style={styles.logoIcon}>🍴</Text>
-            </View>
+            <Image 
+              source={{ uri: 'https://i.ibb.co/7tmLxCNZ/Purple-Minimalist-People-Profile-Logo-1.png' }} 
+              style={styles.logoImage}
+            />
             <Text style={styles.logoText}>PrepMaster Pro</Text>
             <Text style={styles.subtitleText}>Kitchen Management System</Text>
           </View>
 
           <View style={styles.formContainer}>
-            <Text style={styles.promptText}>Enter Your PIN</Text>
+            <Text style={styles.promptText}>{t('enterPin')}</Text>
             
             <View style={styles.pinContainer}>
               {[0, 1, 2, 3].map((index) => (
@@ -375,14 +385,14 @@ export default function App() {
             <TouchableOpacity 
               style={[
                 styles.loginButton,
-                (pin.length !== 4 || isLoading) && styles.loginButtonDisabled
+                (pin.length !== 4 || isLoading || users.length === 0) && styles.loginButtonDisabled
               ]}
               onPress={handleLogin}
-              disabled={pin.length !== 4 || isLoading}
+              disabled={pin.length !== 4 || isLoading || globalUsers.length === 0}
               activeOpacity={0.8}
             >
               <Text style={styles.loginButtonText}>
-                {isLoading ? 'Authenticating...' : 'Login'}
+                {isLoading ? 'Authenticating...' : globalUsers.length === 0 ? t('loadingUsers') : t('login')}
               </Text>
             </TouchableOpacity>
 
@@ -390,11 +400,11 @@ export default function App() {
               style={styles.clearButton}
               onPress={() => setPin('')}
             >
-              <Text style={styles.clearButtonText}>Clear PIN</Text>
+              <Text style={styles.clearButtonText}>{t('clearPin')}</Text>
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.footerText}>Secure access for authorized personnel</Text>
+          <Text style={styles.footerText}>{t('secureAccess')}</Text>
         </Animated.View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -404,46 +414,31 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#ffffff',
   },
   keyboardView: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+    paddingTop: 60,
   },
   loginCard: {
     width: '100%',
     maxWidth: 400,
     backgroundColor: '#ffffff',
-    borderRadius: 24,
+    borderRadius: 16,
     padding: 32,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
   },
   logoContainer: {
     alignItems: 'center',
     marginBottom: 40,
   },
-  logoCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#ff6b6b',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-    shadowColor: '#ff6b6b',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  logoIcon: {
-    fontSize: 40,
+  logoImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 16,
+    marginBottom: 20,
   },
   logoText: {
     fontSize: 32,
@@ -476,13 +471,13 @@ const styles = StyleSheet.create({
     width: 16,
     height: 16,
     borderRadius: 8,
-    backgroundColor: '#ecf0f1',
+    backgroundColor: '#f3f4f6',
     borderWidth: 2,
-    borderColor: '#bdc3c7',
+    borderColor: '#d1d5db',
   },
   pinDotFilled: {
-    backgroundColor: '#ff6b6b',
-    borderColor: '#ff6b6b',
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
   },
   hiddenInput: {
     position: 'absolute',
@@ -491,22 +486,15 @@ const styles = StyleSheet.create({
     height: 1,
   },
   loginButton: {
-    backgroundColor: '#2ecc71',
+    backgroundColor: '#2563eb',
     paddingVertical: 16,
     paddingHorizontal: 60,
     borderRadius: 12,
     width: '100%',
     alignItems: 'center',
-    shadowColor: '#2ecc71',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 5,
   },
   loginButtonDisabled: {
-    backgroundColor: '#95a5a6',
-    shadowOpacity: 0,
-    elevation: 0,
+    backgroundColor: '#d1d5db',
   },
   loginButtonText: {
     color: '#ffffff',

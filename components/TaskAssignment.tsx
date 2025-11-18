@@ -10,6 +10,7 @@ import {
   SafeAreaView,
   Modal,
 } from 'react-native';
+import { useUser } from '@/context/UserContext';
 
 // --- TYPES ---
 type UserRole = 'IT_Admin' | 'Manager' | 'Employee';
@@ -81,7 +82,8 @@ const initialTasks: Task[] = [
   },
 ];
 
-export default function TaskAssignment({ currentUser, onBack, allUsers }: TaskAssignmentProps) {
+export default function TaskAssignment({ currentUser, onBack, allUsers: _allUsersProp }: TaskAssignmentProps) {
+  const { allUsers } = useUser();
   const [tasks, setTasks] = useState<Task[]>(initialTasks);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -235,9 +237,8 @@ export default function TaskAssignment({ currentUser, onBack, allUsers }: TaskAs
           <Text style={styles.headerText}>Task Assignment</Text>
         </View>
         <View style={styles.accessDenied}>
-          <Text style={styles.accessDeniedEmoji}>🔒</Text>
-          <Text style={styles.accessDeniedText}>Access Denied</Text>
-          <Text style={styles.accessDeniedSubtext}>
+          <Text style={styles.accessDeniedTitle}>Access Denied</Text>
+          <Text style={styles.accessDeniedText}>
             You dont have permission to assign tasks.
           </Text>
         </View>
@@ -329,14 +330,14 @@ export default function TaskAssignment({ currentUser, onBack, allUsers }: TaskAs
                 </View>
 
                 <View style={styles.taskDetailRow}>
-                  <Text style={styles.taskDetailLabel}>👤 Assigned To:</Text>
+                  <Text style={styles.taskDetailLabel}>Assigned To:</Text>
                   <Text style={styles.taskDetailValue}>
                     {getUserName(task.assignedTo)}
                   </Text>
                 </View>
 
                 <View style={styles.taskDetailRow}>
-                  <Text style={styles.taskDetailLabel}>⚡ Priority:</Text>
+                  <Text style={styles.taskDetailLabel}>Priority:</Text>
                   <Text
                     style={[
                       styles.taskDetailValue,
@@ -356,7 +357,7 @@ export default function TaskAssignment({ currentUser, onBack, allUsers }: TaskAs
 
                 {task.notes && (
                   <View style={styles.notesSection}>
-                    <Text style={styles.notesLabel}>📝 Notes:</Text>
+                    <Text style={styles.notesLabel}>Notes:</Text>
                     <Text style={styles.notesText}>{task.notes}</Text>
                   </View>
                 )}
@@ -442,7 +443,7 @@ export default function TaskAssignment({ currentUser, onBack, allUsers }: TaskAs
                             styles.employeeOptionTextSelected,
                         ]}
                       >
-                        👤 {employee.name}
+                        {employee.name}
                       </Text>
                     </TouchableOpacity>
                   ))

@@ -9,7 +9,11 @@ import {
   Alert,
   SafeAreaView,
   Modal,
+  Image,
 } from 'react-native';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useLocale } from '@/context/LocaleContext';
+import { useUser } from '@/context/UserContext';
 import { db } from '@/lib/firebase';
 import {
   addDoc,
@@ -22,13 +26,33 @@ import {
   serverTimestamp,
   // setDoc,
   // updateDoc,
-  // where,
-  // getDocs,
+  where,
+  getDocs,
 } from 'firebase/firestore';
 
 // --- TYPES ---
 type UserRole = 'IT_Admin' | 'Manager' | 'Employee';
 type Priority = 'high' | 'medium' | 'low';
+
+// --- PREDEFINED PREP ITEMS ---
+const PREP_ITEMS = [
+  // Tray items (1-4 trays)
+  { name: 'Pancetta', unit: 'trays', qtyOptions: ['1', '2', '3', '4'] },
+  { name: 'Roasted Veggies', unit: 'trays', qtyOptions: ['1', '2', '3', '4'] },
+  { name: 'Sliced Potatoes', unit: 'trays', qtyOptions: ['1', '2', '3', '4'] },
+  { name: 'Parm Potatoes', unit: 'trays', qtyOptions: ['1', '2', '3', '4'] },
+  { name: '9oz Dough', unit: 'trays', qtyOptions: ['1', '2', '3', '4'] },
+  { name: '6oz Dough', unit: 'trays', qtyOptions: ['1', '2', '3', '4'] },
+  { name: 'Mushrooms', unit: 'half trays', qtyOptions: ['1', '2', '3', '4'] },
+  // Quart container items (4qt or 8qt)
+  { name: 'Slow Cooked Onions', unit: 'qt', qtyOptions: ['4', '8'] },
+  { name: 'Black Olives', unit: 'qt', qtyOptions: ['4', '8'] },
+  { name: 'Roasted Pepper Soup', unit: 'qt', qtyOptions: ['4', '8'] },
+  { name: 'Red Onions', unit: 'qt', qtyOptions: ['4', '8'] },
+  { name: 'Prosciutto', unit: 'qt', qtyOptions: ['4', '8'] },
+  { name: 'Artichokes', unit: 'qt', qtyOptions: ['4', '8'] },
+  { name: 'Peppadews', unit: 'qt', qtyOptions: ['4', '8'] },
+];
 
 interface User {
   id: number;
@@ -74,7 +98,9 @@ interface PrepScheduleManagerProps {
 // Reference example; Firestore provides live data
 // const initialSchedules: PrepSchedule[] = [];
 
-export default function PrepScheduleManager({ currentUser, onBack, allUsers, onViewSchedule }: PrepScheduleManagerProps) {
+export default function PrepScheduleManager({ currentUser, onBack, allUsers: _allUsersProp, onViewSchedule }: PrepScheduleManagerProps) {
+  const { t } = useLocale();
+  const { allUsers, usersLoaded } = useUser();
   const [schedules, setSchedules] = useState<PrepSchedule[]>([]);
   const [scheduleDocIds, setScheduleDocIds] = useState<Record<number, string>>({});
   const [modalVisible, setModalVisible] = useState(false);
@@ -85,6 +111,10 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
   const [taskQty, setTaskQty] = useState('');
   const [taskPriority, setTaskPriority] = useState<Priority>('medium');
   const [tasksList, setTasksList] = useState<PrepTask[]>([]);
+  const [dateForecasts, setDateForecasts] = useState<Array<{ itemName: string; predictedQty: number }>>([]);
+  const [showPrepItemPicker, setShowPrepItemPicker] = useState(false);
+  const [selectedPrepItem, setSelectedPrepItem] = useState<{ name: string; unit: string; qtyOptions: string[] } | null>(null);
+  const [showQtyPicker, setShowQtyPicker] = useState(false);
 
   const canManagePrep = currentUser.permissions.includes('assign_tasks') || 
                         currentUser.role === 'Manager' || 
@@ -92,7 +122,11 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
 
   const canCreateSchedules = currentUser.role === 'Manager' || currentUser.role === 'IT_Admin';
 
-  const employees = useMemo(() => allUsers.filter(u => u.active && (u.role === 'Employee' || u.role === 'Manager')), [allUsers]);
+  const employees = useMemo(
+    () => allUsers.filter(u => u.active && (u.role === 'Employee' || u.role === 'Manager')),
+    [allUsers]
+  );
+  const effectiveEmployees = employees.length > 0 ? employees : (currentUser ? [currentUser] : []);
 
   // Realtime subscription to Firestore schedules
   useEffect(() => {
@@ -119,6 +153,29 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
     });
     return () => unsub();
   }, []);
+
+  // Load forecasts for selected date when modal is open
+  useEffect(() => {
+    const load = async () => {
+      if (!modalVisible || !selectedDate) { setDateForecasts([]); return; }
+      try {
+        const q = query(collection(db, 'prepForecasts'), where('date', '==', selectedDate));
+        const snap = await getDocs(q);
+        const rows: Array<{ itemName: string; predictedQty: number }> = [];
+        snap.forEach(d => {
+          const data = d.data() as any;
+          if (typeof data?.itemName === 'string') {
+            rows.push({ itemName: data.itemName, predictedQty: Number(data.predictedQty || 0) });
+          }
+        });
+        rows.sort((a,b) => b.predictedQty - a.predictedQty);
+        setDateForecasts(rows.slice(0, 10));
+      } catch {
+        setDateForecasts([]);
+      }
+    };
+    load();
+  }, [modalVisible, selectedDate]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -150,34 +207,34 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
   };
 
   const handleCreateSchedule = () => {
-    if (employees.length === 0) {
-      Alert.alert('No Employees', 'No active employees available to assign.');
+    if (!usersLoaded) {
+      Alert.alert('Loading', 'Employees are still loading. Please try again in a moment.');
       return;
     }
     setModalVisible(true);
     setSelectedDate(getTodayDateString());
-    setSelectedPrimaryWorker(employees[0].id);
+    setSelectedPrimaryWorker(effectiveEmployees[0]?.id || currentUser.id);
     setSelectedAdditionalWorkers([]);
     setTasksList([]);
   };
 
   const handleAddTaskToList = () => {
-    if (!taskName.trim() || !taskQty.trim()) {
-      Alert.alert('Error', 'Please enter task name and quantity.');
+    if (!selectedPrepItem || !taskQty) {
+      Alert.alert('Error', 'Please select a prep item and quantity.');
       return;
     }
 
     const newTask: PrepTask = {
       id: Date.now(),
-      name: taskName,
-      qty: taskQty,
+      name: selectedPrepItem.name,
+      qty: `${taskQty} ${selectedPrepItem.unit}`,
       status: 'Incomplete',
       notes: '',
       priority: taskPriority,
     };
 
     setTasksList([...tasksList, newTask]);
-    setTaskName('');
+    setSelectedPrepItem(null);
     setTaskQty('');
     setTaskPriority('medium');
   };
@@ -236,24 +293,24 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
 
   const handleDeleteSchedule = (scheduleId: number) => {
     Alert.alert(
-      'Confirm Delete',
-      'Are you sure you want to delete this prep schedule?',
+      t('confirmDelete'),
+      t('confirmDeleteSchedule'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('cancel'), style: 'cancel' },
         {
-          text: 'Delete',
+          text: t('delete'),
           style: 'destructive',
           onPress: async () => {
             const docId = scheduleDocIds[scheduleId];
             if (!docId) {
-              Alert.alert('Error', 'Could not find schedule to delete.');
+              Alert.alert(t('error'), t('scheduleNotFound'));
               return;
             }
             try {
               await deleteDoc(doc(db, 'schedules', docId));
-              Alert.alert('Deleted', 'Schedule has been removed.');
+              Alert.alert(t('deleted'), t('scheduleRemoved'));
             } catch (e: any) {
-              Alert.alert('Error', e?.message || 'Failed to delete schedule');
+              Alert.alert(t('error'), e?.message || t('failedDeleteSchedule'));
             }
           },
         },
@@ -279,44 +336,48 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
   if (!canManagePrep) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
+        <View style={styles.topBar}>
+          <Image
+            source={{ uri: 'https://i.ibb.co/7tmLxCNZ/Purple-Minimalist-People-Profile-Logo-1.png' }}
+            style={styles.logo}
+          />
           <TouchableOpacity onPress={onBack} style={styles.backButton}>
             <Text style={styles.backButtonText}>← Back</Text>
           </TouchableOpacity>
-          <Text style={styles.headerText}>📅 Prep Schedules</Text>
-          <Text style={styles.subHeaderText}>
-            View your assigned prep schedules
-          </Text>
         </View>
 
-        {/* Stats Card - Show user's schedules only */}
-        <View style={styles.statsCard}>
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>
-              {schedules.filter(s => 
-                s.primaryPrepPerson === currentUser.id || 
-                s.additionalWorkers.includes(currentUser.id)
-              ).length}
-            </Text>
-            <Text style={styles.statLabel}>Your Schedules</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statValue}>
-              {schedules.filter(s => 
-                (s.primaryPrepPerson === currentUser.id || s.additionalWorkers.includes(currentUser.id)) &&
-                s.date >= getTodayDateString()
-              ).length}
-            </Text>
-            <Text style={styles.statLabel}>Upcoming</Text>
-          </View>
-        </View>
+        <View style={styles.content}>
+          <Text style={styles.pageTitle}>Prep Schedules</Text>
+          <Text style={styles.pageSubtitle}>View your assigned prep schedules</Text>
 
-        {/* Schedule List - Only show user's assigned schedules */}
-        <ScrollView style={styles.scheduleList} showsVerticalScrollIndicator={false}>
-          <View style={styles.listHeader}>
-            <Text style={styles.listTitle}>My Prep Schedules</Text>
+          {/* Stats Card - Show user's schedules only */}
+          <View style={styles.statsCard}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>
+                {schedules.filter(s => 
+                  s.primaryPrepPerson === currentUser.id || 
+                  s.additionalWorkers.includes(currentUser.id)
+                ).length}
+              </Text>
+              <Text style={styles.statLabel}>Your Schedules</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>
+                {schedules.filter(s => 
+                  (s.primaryPrepPerson === currentUser.id || s.additionalWorkers.includes(currentUser.id)) &&
+                  s.date >= getTodayDateString()
+                ).length}
+              </Text>
+              <Text style={styles.statLabel}>Upcoming</Text>
+            </View>
           </View>
+
+          {/* Schedule List - Only show user's assigned schedules */}
+          <ScrollView style={styles.scheduleList} showsVerticalScrollIndicator={false}>
+            <View style={styles.listHeader}>
+              <Text style={styles.listTitle}>My Prep Schedules</Text>
+            </View>
 
           {schedules
             .filter(s => s.primaryPrepPerson === currentUser.id || s.additionalWorkers.includes(currentUser.id))
@@ -329,7 +390,7 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
                   {/* Schedule Header */}
                   <View style={styles.scheduleHeader}>
                     <View>
-                      <Text style={styles.scheduleDate}>📅 {formatDate(schedule.date)}</Text>
+                      <Text style={styles.scheduleDate}>{formatDate(schedule.date)}</Text>
                       <Text style={styles.scheduleSubtext}>
                         Created by {getUserName(schedule.createdBy)}
                       </Text>
@@ -354,14 +415,14 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
                   {/* Workers Section */}
                   <View style={styles.workersSection}>
                     <View style={styles.workerItem}>
-                      <Text style={styles.workerLabel}>👤 Primary Prep:</Text>
+                      <Text style={styles.workerLabel}>Primary Prep:</Text>
                       <Text style={styles.workerName}>
                         {getUserName(schedule.primaryPrepPerson)}
                       </Text>
                     </View>
                     {schedule.additionalWorkers.length > 0 && (
                       <View style={styles.workerItem}>
-                        <Text style={styles.workerLabel}>👥 Additional Help:</Text>
+                        <Text style={styles.workerLabel}>Additional Help:</Text>
                         <Text style={styles.workerName}>
                           {schedule.additionalWorkers.map(id => getUserName(id)).join(', ')}
                         </Text>
@@ -406,64 +467,74 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
               );
             })}
           <View style={styles.bottomPadding} />
-        </ScrollView>
+          </ScrollView>
+        </View>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
+      {/* Top Bar */}
+      <View style={styles.topBar}>
+        <Image
+          source={{ uri: 'https://i.ibb.co/7tmLxCNZ/Purple-Minimalist-People-Profile-Logo-1.png' }}
+          style={styles.logo}
+        />
         <TouchableOpacity onPress={onBack} style={styles.backButton}>
           <Text style={styles.backButtonText}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.headerText}>📅 Prep Schedule Manager</Text>
-        <Text style={styles.subHeaderText}>
-          Create and manage weekly prep schedules
-        </Text>
       </View>
 
-      {/* Stats Card */}
-      <View style={styles.statsCard}>
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{schedules.length}</Text>
-          <Text style={styles.statLabel}>Scheduled Days</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>
-            {schedules.reduce((sum, s) => sum + s.tasks.length, 0)}
-          </Text>
-          <Text style={styles.statLabel}>Total Tasks</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>
-            {schedules.filter(s => s.date >= getTodayDateString()).length}
-          </Text>
-          <Text style={styles.statLabel}>Upcoming</Text>
-        </View>
-      </View>
+      <View style={styles.content}>
+        <Text style={styles.pageTitle}>Prep Schedule Manager</Text>
+        <Text style={styles.pageSubtitle}>Create and manage weekly prep schedules</Text>
 
-      {/* Schedule List */}
-      <ScrollView style={styles.scheduleList} showsVerticalScrollIndicator={false}>
-        <View style={styles.listHeader}>
-          <Text style={styles.listTitle}>Prep Schedules</Text>
-          {canCreateSchedules && (
-            <TouchableOpacity style={styles.addButton} onPress={handleCreateSchedule} disabled={employees.length===0}>
-              <Text style={styles.addButtonText}>{employees.length===0 ? 'No Employees' : '+ Create Schedule'}</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-        {schedules.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyStateEmoji}>📋</Text>
-            <Text style={styles.emptyStateText}>No prep schedules yet</Text>
-            <Text style={styles.emptyStateSubtext}>
-              Create your first prep schedule to get started
-            </Text>
+        {/* Stats Card */}
+        <View style={styles.statsCard}>
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>{schedules.length}</Text>
+            <Text style={styles.statLabel}>Scheduled Days</Text>
           </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>
+              {schedules.reduce((sum, s) => sum + s.tasks.length, 0)}
+            </Text>
+            <Text style={styles.statLabel}>{t('totalTasks')}</Text>
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <Text style={styles.statValue}>
+              {schedules.filter(s => s.date >= getTodayDateString()).length}
+            </Text>
+            <Text style={styles.statLabel}>{t('upcoming')}</Text>
+          </View>
+        </View>
+
+        {/* Schedule List */}
+        <ScrollView style={styles.scheduleList} showsVerticalScrollIndicator={false}>
+          <View style={styles.listHeader}>
+            <Text style={styles.listTitle}>{t('prepSchedules')}</Text>
+            {canCreateSchedules && (
+              <TouchableOpacity
+                style={styles.addButton}
+                onPress={handleCreateSchedule}
+                disabled={!usersLoaded}
+              >
+                <Text style={styles.addButtonText}>
+                  {!usersLoaded ? 'Loading…' : `+ ${t('createSchedule')}`}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {schedules.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>{t('noSchedulesYet')}</Text>
+              <Text style={styles.emptyStateSubtext}>
+                {t('createFirstSchedule')}
+              </Text>
+            </View>
         ) : (
           schedules.map(schedule => {
             const stats = getScheduleStats(schedule);
@@ -474,9 +545,9 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
                 {/* Schedule Header */}
                 <View style={styles.scheduleHeader}>
                   <View>
-                    <Text style={styles.scheduleDate}>📅 {formatDate(schedule.date)}</Text>
+                    <Text style={styles.scheduleDate}>{formatDate(schedule.date)}</Text>
                     <Text style={styles.scheduleSubtext}>
-                      Created by {getUserName(schedule.createdBy)}
+                      {t('createdBy')} {getUserName(schedule.createdBy)}
                     </Text>
                   </View>
                   {canManagePrep && (
@@ -507,14 +578,14 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
                 {/* Workers Section */}
                 <View style={styles.workersSection}>
                   <View style={styles.workerItem}>
-                    <Text style={styles.workerLabel}>👤 Primary Prep:</Text>
+                    <Text style={styles.workerLabel}>Primary Prep:</Text>
                     <Text style={styles.workerName}>
                       {getUserName(schedule.primaryPrepPerson)}
                     </Text>
                   </View>
                   {schedule.additionalWorkers.length > 0 && (
                     <View style={styles.workerItem}>
-                      <Text style={styles.workerLabel}>👥 Additional Help:</Text>
+                      <Text style={styles.workerLabel}>Additional Help:</Text>
                       <Text style={styles.workerName}>
                         {schedule.additionalWorkers.map(id => getUserName(id)).join(', ')}
                       </Text>
@@ -561,6 +632,7 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
         )}
         <View style={styles.bottomPadding} />
       </ScrollView>
+      </View>
 
       {/* Create Schedule Modal */}
       <Modal
@@ -574,6 +646,24 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
             <Text style={styles.modalTitle}>Create Prep Schedule</Text>
 
             <ScrollView style={styles.modalForm} showsVerticalScrollIndicator={false}>
+              {/* Forecast Suggestions */}
+              <Text style={styles.inputLabel}>{t('suggestedPrep')}</Text>
+              {dateForecasts.length === 0 ? (
+                <Text style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>{t('forecastEmpty')}</Text>
+              ) : (
+                <View style={{ marginBottom: 8 }}>
+                  {dateForecasts.map((f, idx) => {
+                    const roundedQty = Math.ceil(f.predictedQty);
+                    const unit = roundedQty === 1 ? 'tray' : 'trays';
+                    return (
+                      <View key={`${f.itemName}-${idx}`} style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+                        <Text style={{ fontSize: 13, color: '#111827' }}>{f.itemName}</Text>
+                        <Text style={{ fontSize: 13, color: '#2563eb', fontWeight: '700' }}>{roundedQty} {unit}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
               {/* Date Selection */}
               <Text style={styles.inputLabel}>Select Date *</Text>
               <View style={styles.dateSelector}>
@@ -612,7 +702,7 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
                       styles.workerOptionText,
                       selectedPrimaryWorker === worker.id && styles.workerOptionTextSelected,
                     ]}>
-                      👤 {worker.name}
+                      {worker.name}
                     </Text>
                   </TouchableOpacity>
                 ))}
@@ -636,8 +726,7 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
                         styles.workerOptionText,
                         selectedAdditionalWorkers.includes(worker.id) && styles.workerOptionTextSelected,
                       ]}>
-                        {selectedAdditionalWorkers.includes(worker.id) ? '✓ ' : ''}
-                        👥 {worker.name}
+                        {worker.name}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -646,18 +735,77 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
               {/* Add Tasks Section */}
               <Text style={styles.inputLabel}>Add Tasks *</Text>
               <View style={styles.taskInputSection}>
-                <TextInput
-                  style={styles.taskInput}
-                  value={taskName}
-                  onChangeText={setTaskName}
-                  placeholder="Task name (e.g., Slice Onions)"
-                />
-                <TextInput
-                  style={styles.taskInput}
-                  value={taskQty}
-                  onChangeText={setTaskQty}
-                  placeholder="Quantity (e.g., 10 lbs)"
-                />
+                {/* Prep Item Picker */}
+                <TouchableOpacity
+                  style={styles.prepItemPickerButton}
+                  onPress={() => {
+                    console.log('Prep item picker button pressed');
+                    console.log('Current showPrepItemPicker state:', showPrepItemPicker);
+                    setShowPrepItemPicker(!showPrepItemPicker);
+                    console.log('Set showPrepItemPicker to true');
+                  }}
+                >
+                  <Text style={selectedPrepItem ? styles.prepItemPickerTextSelected : styles.prepItemPickerTextPlaceholder}>
+                    {selectedPrepItem ? selectedPrepItem.name : 'Select Prep Item'}
+                  </Text>
+                  <IconSymbol name={showPrepItemPicker ? "chevron.up" : "chevron.down"} size={16} color="#6b7280" />
+                </TouchableOpacity>
+                
+                {/* Inline Prep Item List (Dropdown) */}
+                {showPrepItemPicker && (
+                  <View style={styles.prepItemDropdown}>
+                    <ScrollView style={styles.prepItemDropdownScroll} nestedScrollEnabled>
+                      {PREP_ITEMS.map((item, index) => (
+                        <TouchableOpacity
+                          key={index}
+                          style={[
+                            styles.dropdownItem,
+                            selectedPrepItem?.name === item.name && styles.dropdownItemSelected,
+                          ]}
+                          onPress={() => {
+                            setSelectedPrepItem(item);
+                            setTaskQty('');
+                            setShowPrepItemPicker(false);
+                          }}
+                        >
+                          <View>
+                            <Text style={styles.dropdownItemName}>{item.name}</Text>
+                            <Text style={styles.dropdownItemUnit}>{item.unit}</Text>
+                          </View>
+                          {selectedPrepItem?.name === item.name && (
+                            <Text style={{ color: '#2563eb', fontSize: 18 }}>✓</Text>
+                          )}
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                )}
+                
+                {/* Quantity Picker Buttons */}
+                {selectedPrepItem && (
+                  <View>
+                    <Text style={styles.qtyLabel}>Select Quantity</Text>
+                    <View style={styles.qtyOptionsRow}>
+                      {selectedPrepItem.qtyOptions.map((qty) => (
+                        <TouchableOpacity
+                          key={qty}
+                          style={[
+                            styles.qtyOptionButton,
+                            taskQty === qty && styles.qtyOptionButtonSelected,
+                          ]}
+                          onPress={() => setTaskQty(qty)}
+                        >
+                          <Text style={[
+                            styles.qtyOptionText,
+                            taskQty === qty && styles.qtyOptionTextSelected,
+                          ]}>
+                            {qty} {selectedPrepItem.unit}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                )}
                 
                 <View style={styles.priorityRow}>
                   <Text style={styles.priorityLabel}>Priority:</Text>
@@ -702,7 +850,10 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
                         />
                         <View style={styles.taskListItemText}>
                           <Text style={styles.taskListItemName}>{task.name}</Text>
-                          <Text style={styles.taskListItemQty}>📦 {task.qty}</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                            <IconSymbol name="cube.box.fill" size={12} color="#6b7280" />
+                            <Text style={styles.taskListItemQty}>{task.qty}</Text>
+                          </View>
                         </View>
                       </View>
                       <TouchableOpacity 
@@ -741,63 +892,69 @@ export default function PrepScheduleManager({ currentUser, onBack, allUsers, onV
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: '#ffffff',
+    paddingTop: 50,
   },
-  header: {
-    backgroundColor: '#2c3e50',
-    paddingTop: 20,
-    paddingBottom: 20,
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
     paddingHorizontal: 20,
+    backgroundColor: '#ffffff',
   },
+  logo: { width: 50, height: 50, borderRadius: 10 },
   backButton: {
-    marginBottom: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
   },
   backButtonText: {
-    color: '#3498db',
-    fontSize: 16,
+    color: '#2563eb',
+    fontSize: 15,
     fontWeight: '600',
   },
-  headerText: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#ffffff',
+  content: {
+    flex: 1,
+    paddingHorizontal: 20,
+  },
+  pageTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111827',
     marginBottom: 4,
   },
-  subHeaderText: {
-    fontSize: 13,
-    color: '#bdc3c7',
-    fontWeight: '500',
+  pageSubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginBottom: 20,
   },
   statsCard: {
     flexDirection: 'row',
-    backgroundColor: '#ffffff',
-    margin: 16,
+    backgroundColor: '#f9fafb',
     padding: 20,
-    borderRadius: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
+    borderRadius: 12,
+    marginBottom: 20,
   },
   statItem: {
     flex: 1,
     alignItems: 'center',
   },
   statValue: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#2c3e50',
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#111827',
     marginBottom: 4,
   },
   statLabel: {
     fontSize: 12,
-    color: '#7f8c8d',
-    fontWeight: '600',
+    color: '#6b7280',
+    fontWeight: '500',
   },
   statDivider: {
     width: 1,
-    backgroundColor: '#ecf0f1',
+    backgroundColor: '#e5e7eb',
   },
   scheduleList: {
     flex: 1,
@@ -810,20 +967,15 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   listTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#2c3e50',
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
   },
   addButton: {
-    backgroundColor: '#2ecc71',
+    backgroundColor: '#10b981',
     paddingVertical: 10,
     paddingHorizontal: 20,
-    borderRadius: 10,
-    shadowColor: '#2ecc71',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 3,
+    borderRadius: 8,
   },
   addButtonText: {
     color: '#ffffff',
@@ -835,30 +987,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 80,
   },
-  emptyStateEmoji: {
-    fontSize: 64,
-    marginBottom: 16,
-  },
   emptyStateText: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
+    color: '#111827',
     marginBottom: 8,
   },
   emptyStateSubtext: {
     fontSize: 14,
-    color: '#7f8c8d',
+    color: '#6b7280',
   },
   scheduleCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
     padding: 16,
     marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
   },
   pastSchedule: {
     opacity: 0.7,
@@ -870,14 +1013,14 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   scheduleDate: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#2c3e50',
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#111827',
     marginBottom: 4,
   },
   scheduleSubtext: {
     fontSize: 12,
-    color: '#7f8c8d',
+    color: '#6b7280',
   },
   deleteScheduleButton: {
     padding: 8,
@@ -897,7 +1040,7 @@ const styles = StyleSheet.create({
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#2ecc71',
+    backgroundColor: '#10b981',
   },
   progressText: {
     fontSize: 12,
@@ -1194,5 +1337,181 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#7f8c8d',
     textAlign: 'center',
+  },
+  prepItemPickerButton: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#ffffff',
+    marginBottom: 12,
+  },
+  prepItemPickerTextSelected: {
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '500',
+  },
+  prepItemPickerTextPlaceholder: {
+    fontSize: 15,
+    color: '#9ca3af',
+  },
+  qtyInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#ffffff',
+    marginBottom: 12,
+  },
+  qtyInput: {
+    flex: 1,
+    paddingVertical: 12,
+    fontSize: 15,
+  },
+  unitLabel: {
+    fontSize: 14,
+    color: '#6b7280',
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  pickerModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  pickerModalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    width: '100%',
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  pickerModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+  },
+  pickerModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#111827',
+  },
+  pickerModalList: {
+    paddingHorizontal: 20,
+    paddingVertical: 8,
+  },
+  pickerItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  pickerItemSelected: {
+    backgroundColor: '#eff6ff',
+  },
+  pickerItemContent: {
+    flex: 1,
+  },
+  pickerItemName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 4,
+  },
+  pickerItemUnit: {
+    fontSize: 14,
+    color: '#6b7280',
+  },
+  qtyLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  qtyOptionsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  qtyOptionButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#d1d5db',
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+  },
+  qtyOptionButtonSelected: {
+    borderColor: '#2563eb',
+    backgroundColor: '#eff6ff',
+  },
+  qtyOptionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
+  },
+  qtyOptionTextSelected: {
+    color: '#2563eb',
+  },
+  prepItemDropdown: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    backgroundColor: '#ffffff',
+    marginBottom: 12,
+    maxHeight: 200,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  prepItemDropdownScroll: {
+    maxHeight: 200,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  dropdownItemSelected: {
+    backgroundColor: '#eff6ff',
+  },
+  dropdownItemName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  dropdownItemUnit: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: 2,
   },
 });

@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { db } from '@/lib/firebase';
 import { doc, updateDoc } from 'firebase/firestore';
+import { useUser } from '@/context/UserContext';
 
 // --- TYPES ---
 type UserRole = 'IT_Admin' | 'Manager' | 'Employee';
@@ -61,11 +62,12 @@ interface PrepDetailViewProps {
 export default function PrepDetailView({ 
   schedule, 
   currentUser, 
-  allUsers, 
+  allUsers: _allUsersProp, 
   onBack,
   onUpdateSchedule,
   scheduleDocId,
 }: PrepDetailViewProps) {
+  const { allUsers } = useUser();
   const [localSchedule, setLocalSchedule] = useState<PrepSchedule>(schedule);
   const [notesModalVisible, setNotesModalVisible] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
@@ -211,7 +213,7 @@ export default function PrepDetailView({
         <TouchableOpacity onPress={onBack} style={styles.backButton}>
           <Text style={styles.backButtonText}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.headerText}>📅 Prep Details</Text>
+        <Text style={styles.headerText}>Prep Details</Text>
         <Text style={styles.dateText}>{formatDate(localSchedule.date)}</Text>
       </View>
 
@@ -227,7 +229,7 @@ export default function PrepDetailView({
           <View style={styles.progressStats}>
             <View style={styles.statItem}>
               <Text style={styles.statValue}>{completedCount}</Text>
-              <Text style={styles.statLabel}>✅ Done</Text>
+              <Text style={styles.statLabel}>Done</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>

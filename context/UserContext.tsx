@@ -1,4 +1,6 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { db } from '@/lib/firebase';
+import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
 
 type UserRole = 'IT_Admin' | 'Manager' | 'Employee';
 
@@ -17,6 +19,7 @@ interface UserContextType {
   setCurrentUser: (user: User | null) => void;
   allUsers: User[];
   setAllUsers: (users: User[]) => void;
+  usersLoaded: boolean;
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
@@ -24,9 +27,42 @@ const UserContext = createContext<UserContextType | undefined>(undefined);
 export function UserProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [usersLoaded, setUsersLoaded] = useState(false);
+
+  // Subscribe globally to users so all tabs see employees without visiting a specific screen first
+  useEffect(() => {
+    try {
+      const q = query(collection(db, 'users'), orderBy('id', 'asc'));
+      const unsub = onSnapshot(
+        q,
+        (snap) => {
+          const next: User[] = [];
+          snap.forEach((ds) => {
+            const d = ds.data() as any;
+            if (typeof d?.id !== 'number') return;
+            next.push({
+              id: d.id,
+              name: String(d.name || ''),
+              pin: String(d.pin || ''),
+              role: (d.role || 'Employee') as User['role'],
+              permissions: Array.isArray(d.permissions) ? d.permissions : [],
+              active: d.active !== false,
+              createdAt: d.createdAt || new Date().toISOString(),
+            });
+          });
+          setAllUsers(next);
+          setUsersLoaded(true);
+        },
+        () => { setAllUsers([]); setUsersLoaded(true); }
+      );
+      return () => unsub();
+    } catch {
+      // noop
+    }
+  }, []);
 
   return (
-    <UserContext.Provider value={{ currentUser, setCurrentUser, allUsers, setAllUsers }}>
+    <UserContext.Provider value={{ currentUser, setCurrentUser, allUsers, setAllUsers, usersLoaded }}>
       {children}
     </UserContext.Provider>
   );

@@ -81,7 +81,7 @@ export default function ExploreTab() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: '#ffffff',
   },
   content: {
     flex: 1,
@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
   },
   message: {
     fontSize: 18,
-    color: '#7f8c8d',
+    color: '#6b7280',
     textAlign: 'center',
   },
 });

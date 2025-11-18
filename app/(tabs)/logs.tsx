@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { SafeAreaView, View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform } from 'react-native';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { SafeAreaView, View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Platform, Image } from 'react-native';
+import { collection, onSnapshot, orderBy, query, where, getDocs, addDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useUser } from '@/context/UserContext';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
+import { useLocale } from '@/context/LocaleContext';
 
 // Types (align with rest of app)
 type Priority = 'high' | 'medium' | 'low';
@@ -43,10 +45,19 @@ const getDateNDaysAgo = (n: number) => {
 
 export default function LogsScreen() {
   const { currentUser, allUsers } = useUser();
+  const { t } = useLocale();
   const [schedules, setSchedules] = useState<PrepSchedule[]>([]);
   const [statusFilter, setStatusFilter] = useState<'all' | 'complete' | 'incomplete'>('all');
   const [userFilter, setUserFilter] = useState<number | 'all'>('all');
   const [range, setRange] = useState<'today' | '7' | '30'>('7');
+  const [recentLogs, setRecentLogs] = useState<Array<{ id: string; taskName: string; qty?: string; action: string; userName?: string; createdAt?: any }>>([]);
+  const [forecasts, setForecasts] = useState<Array<{ id: string; date: string; itemName: string; predictedQty: number }>>([]);
+  const [generatingForecasts, setGeneratingForecasts] = useState(false);
+  const [generatingSampleData, setGeneratingSampleData] = useState(false);
+  const [recentOpen, setRecentOpen] = useState(false);
+
+  // Access control flag (do not return early before hooks)
+  const canAccess = !!currentUser && (currentUser.role === 'Manager' || currentUser.role === 'IT_Admin');
 
   // subscribe to schedules
   useEffect(() => {
@@ -69,6 +80,51 @@ export default function LogsScreen() {
       setSchedules(next);
     });
     return () => unsub();
+  }, []);
+
+  // subscribe to recent prepLogs (latest 50)
+  useEffect(() => {
+    const ql = query(collection(db, 'prepLogs'), orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(ql, snap => {
+      const rows: Array<{ id: string; taskName: string; qty?: string; action: string; userName?: string; createdAt?: any }> = [];
+      snap.forEach(ds => {
+        const d = ds.data() as any;
+        rows.push({
+          id: ds.id,
+          taskName: String(d.taskName || ''),
+          qty: d.qty,
+          action: String(d.action || ''),
+          userName: d.userName,
+          createdAt: d.createdAt,
+        });
+      });
+      setRecentLogs(rows.slice(0, 50));
+    }, _err => setRecentLogs([]));
+    return () => unsub();
+  }, []);
+
+  // load forecasts for next 7 days
+  useEffect(() => {
+    const load = async () => {
+      const today = new Date();
+      const toStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      const start = toStr(today);
+      const endD = new Date(); endD.setDate(today.getDate()+7);
+      const end = toStr(endD);
+      try {
+        const qf = query(collection(db, 'prepForecasts'), where('date', '>=', start), where('date', '<=', end), orderBy('date', 'asc'));
+        const snap = await getDocs(qf);
+        const rows: Array<{ id: string; date: string; itemName: string; predictedQty: number }> = [] as any;
+        snap.forEach(d => {
+          const x = d.data() as any;
+          if (x?.date && x?.itemName) rows.push({ id: d.id, date: x.date, itemName: x.itemName, predictedQty: Number(x.predictedQty || 0) });
+        });
+        setForecasts(rows);
+      } catch {
+        setForecasts([]);
+      }
+    };
+    load();
   }, []);
 
   const dateBounds = useMemo(() => {
@@ -125,22 +181,7 @@ export default function LogsScreen() {
       .slice(0, 3);
   }, [filtered]);
 
-  // Block access for non-managers/non-admins
-  if (!currentUser || (currentUser.role !== 'Manager' && currentUser.role !== 'IT_Admin')) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerText}>🔒 Access Denied</Text>
-        </View>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-          <Text style={{ fontSize: 48, marginBottom: 16 }}>🚫</Text>
-          <Text style={{ fontSize: 18, color: '#e74c3c', fontWeight: '700', textAlign: 'center' }}>
-            Logs are only accessible to Managers and IT Admins.
-          </Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // Block access handled at render time with canAccess flag
 
   const getUserName = (id?: number) => {
     if (!id && id !== 0) return 'Unknown';
@@ -154,6 +195,93 @@ export default function LogsScreen() {
       case 'medium': return '#f39c12';
       case 'low': return '#3498db';
       default: return '#95a5a6';
+    }
+  };
+
+  const handleGenerateForecasts = async () => {
+    setGeneratingForecasts(true);
+    try {
+      const PROJECT = 'prepmaster-app-69964';
+      const REGION = 'us-central1';
+      const url = `https://${REGION}-${PROJECT}.cloudfunctions.net/computePrepForecastsNow`;
+      const response = await fetch(url, { method: 'GET' });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      Alert.alert(t('success'), t('forecastsGenerated') || 'Forecasts generated! Refresh in a few seconds.');
+      // Reload forecasts after a short delay
+      setTimeout(() => {
+        const load = async () => {
+          const today = new Date();
+          const toStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+          const start = toStr(today);
+          const endD = new Date(); endD.setDate(today.getDate()+7);
+          const end = toStr(endD);
+          try {
+            const qf = query(collection(db, 'prepForecasts'), where('date', '>=', start), where('date', '<=', end), orderBy('date', 'asc'));
+            const snap = await getDocs(qf);
+            const rows: Array<{ id: string; date: string; itemName: string; predictedQty: number }> = [] as any;
+            snap.forEach(d => {
+              const x = d.data() as any;
+              if (x?.date && x?.itemName) rows.push({ id: d.id, date: x.date, itemName: x.itemName, predictedQty: Number(x.predictedQty || 0) });
+            });
+            setForecasts(rows);
+          } catch {}
+        };
+        load();
+      }, 3000);
+    } catch (e: any) {
+      Alert.alert(t('error'), e?.message || t('failedGenerateForecasts') || 'Failed to generate forecasts');
+    } finally {
+      setGeneratingForecasts(false);
+    }
+  };
+
+  const handleGenerateSampleData = async () => {
+    setGeneratingSampleData(true);
+    try {
+      const sampleItems = [
+        { name: 'Diced Onions', qty: '2 trays', unit: 'trays', numericQty: 2 },
+        { name: 'Sliced Tomatoes', qty: '3 trays', unit: 'trays', numericQty: 3 },
+        { name: 'Chopped Lettuce', qty: '4 containers', unit: 'containers', numericQty: 4 },
+        { name: 'Shredded Cheese', qty: '2 bags', unit: 'bags', numericQty: 2 },
+        { name: 'Prepped Chicken', qty: '5 pans', unit: 'pans', numericQty: 5 },
+        { name: 'Cut Potatoes', qty: '3 trays', unit: 'trays', numericQty: 3 },
+        { name: 'Marinated Beef', qty: '4 pans', unit: 'pans', numericQty: 4 },
+        { name: 'Cooked Rice', qty: '6 hotel pans', unit: 'hotel pans', numericQty: 6 },
+        { name: 'Prepped Salsa', qty: '2 containers', unit: 'containers', numericQty: 2 },
+        { name: 'Sliced Peppers', qty: '1 tray', unit: 'tray', numericQty: 1 },
+      ];
+      
+      // Generate logs for the past 14 days
+      const promises = [];
+      for (let daysAgo = 0; daysAgo < 14; daysAgo++) {
+        const logDate = new Date();
+        logDate.setDate(logDate.getDate() - daysAgo);
+        
+        // Random 3-5 items per day
+        const itemCount = 3 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < itemCount; i++) {
+          const item = sampleItems[Math.floor(Math.random() * sampleItems.length)];
+          const logDoc = {
+            scheduleId: 0,
+            scheduleDate: logDate.toISOString().split('T')[0],
+            taskId: Date.now() + Math.random(),
+            taskName: item.name,
+            qty: item.qty,
+            action: 'prepared',
+            userId: currentUser?.id || 0,
+            userName: currentUser?.name || 'Test User',
+            createdAt: logDate,
+          };
+          promises.push(addDoc(collection(db, 'prepLogs'), logDoc));
+        }
+      }
+      
+      await Promise.all(promises);
+      Alert.alert(t('success'), t('sampleDataGenerated') || `Generated ${promises.length} sample prep logs for the past 14 days!`);
+    } catch (e: any) {
+      Alert.alert(t('error'), e?.message || 'Failed to generate sample data');
+    } finally {
+      setGeneratingSampleData(false);
     }
   };
 
@@ -291,14 +419,102 @@ export default function LogsScreen() {
     }
   };
 
+  if (!canAccess) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <Image source={{ uri: 'https://i.ibb.co/7tmLxCNZ/Purple-Minimalist-People-Profile-Logo-1.png' }} style={styles.logo} />
+        </View>
+        <View style={styles.accessDenied}>
+          <Text style={styles.accessDeniedTitle}>{t('accessDeniedTitle')}</Text>
+          <Text style={styles.accessDeniedText}>{t('accessDeniedText')}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerText}>📘 Prep Logs</Text>
-        <Text style={styles.subHeaderText}>
-          {currentUser?.role === 'Manager' ? 'Manager' : currentUser?.role === 'IT_Admin' ? 'Admin' : 'Employee'} View
-        </Text>
-      </View>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <Image source={{ uri: 'https://i.ibb.co/7tmLxCNZ/Purple-Minimalist-People-Profile-Logo-1.png' }} style={styles.logo} />
+          <Text style={styles.headerText}>Prep Logs</Text>
+        </View>
+
+        {/* Prep Insights */}
+        <View style={styles.insightsCard}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <Text style={styles.insightsTitle}>{t('prepInsights') || 'Prep Insights'}</Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity
+              style={[styles.sampleBtn, generatingSampleData && styles.generateBtnDisabled]}
+              onPress={handleGenerateSampleData}
+              disabled={generatingSampleData}
+            >
+              <Text style={styles.generateBtnText}>
+                {generatingSampleData ? '...' : (t('sampleData') || 'Sample')}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.generateBtn, generatingForecasts && styles.generateBtnDisabled]}
+              onPress={handleGenerateForecasts}
+              disabled={generatingForecasts}
+            >
+              <Text style={styles.generateBtnText}>
+                {generatingForecasts ? (t('generating') || 'Generating...') : (t('generateNow') || 'Generate Now')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        {/* Upcoming Forecasts */}
+        <Text style={styles.sectionTitle}>{t('upcomingForecasts') || 'Upcoming Forecasts (7 days)'}</Text>
+        {forecasts.length === 0 ? (
+          <Text style={styles.sectionEmpty}>{t('forecastEmpty')}</Text>
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12 }}>
+            {forecasts.slice(0, 20).map(f => {
+              const roundedQty = Math.ceil(f.predictedQty);
+              const unit = roundedQty === 1 ? 'tray' : 'trays'; // default unit
+              return (
+                <View key={f.id} style={styles.forecastPill}>
+                  <Text style={styles.forecastDate}>{f.date}</Text>
+                  <Text style={styles.forecastItem}>{f.itemName}</Text>
+                  <Text style={styles.forecastQty}>{roundedQty} {unit}</Text>
+                </View>
+              );
+            })}
+          </ScrollView>
+        )}
+
+        {/* Recent Prep Activity (Collapsible) */}
+        <TouchableOpacity
+          style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 }}
+          onPress={() => setRecentOpen(v => !v)}
+          accessibilityRole="button"
+          accessibilityLabel="Toggle recent prep activity"
+        >
+          <Text style={styles.sectionTitle}>{t('recentPrepActivity') || 'Recent Prep Activity'}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {recentLogs.length > 0 ? (
+              <Text style={{ fontSize: 12, color: '#6b7280' }}>{recentLogs.length} items</Text>
+            ) : null}
+            <IconSymbol name={recentOpen ? 'chevron.up' : 'chevron.down'} size={14} color="#6b7280" />
+          </View>
+        </TouchableOpacity>
+        {recentLogs.length === 0 ? (
+          <Text style={styles.sectionEmpty}>{t('noRecentPrep') || 'No recent prep logged.'}</Text>
+        ) : recentOpen ? (
+          recentLogs.slice(0, 30).map(r => (
+            <View key={r.id} style={styles.activityRow}>
+              <IconSymbol name="cube.box.fill" size={16} color="#2563eb" />
+              <Text style={styles.activityText}>
+                {r.userName ? `${r.userName} ` : ''}{r.action || 'prepared'} {r.qty ? `${r.qty} ` : ''}{r.taskName}
+                {r.createdAt?.toDate ? ` • ${new Date(r.createdAt.toDate()).toLocaleString('en-US', { month: 'short', day: '2-digit', hour: 'numeric', minute: '2-digit' })}` : ''}
+              </Text>
+            </View>
+          ))
+        ) : null}
+        </View>
 
       {/* Filters */}
       <View style={styles.filters}>
@@ -350,17 +566,26 @@ export default function LogsScreen() {
         <View style={styles.statDivider} />
         <View style={styles.statItem}>
           <Text style={styles.statValue}>{stats.done}</Text>
-          <Text style={styles.statLabel}>✅ Done</Text>
+          <View style={styles.statLabelRow}>
+            <IconSymbol name="checkmark.circle.fill" size={16} color="#10b981" />
+            <Text style={styles.statLabel}>Done</Text>
+          </View>
         </View>
         <View style={styles.statDivider} />
         <View style={styles.statItem}>
           <Text style={styles.statValue}>{stats.pending}</Text>
-          <Text style={styles.statLabel}>⏳ Pending</Text>
+          <View style={styles.statLabelRow}>
+            <IconSymbol name="clock.fill" size={16} color="#f59e0b" />
+            <Text style={styles.statLabel}>Pending</Text>
+          </View>
         </View>
         <View style={styles.statDivider} />
         <View style={styles.statItem}>
           <Text style={styles.statValue}>{stats.total}</Text>
-          <Text style={styles.statLabel}>📋 Total</Text>
+          <View style={styles.statLabelRow}>
+            <IconSymbol name="list.bullet" size={16} color="#6b7280" />
+            <Text style={styles.statLabel}>Total</Text>
+          </View>
         </View>
       </View>
 
@@ -390,10 +615,9 @@ export default function LogsScreen() {
       </View>
 
       {/* Results */}
-      <ScrollView style={styles.results} showsVerticalScrollIndicator={false}>
+      <View style={styles.results}>
         {filtered.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyEmoji}>🗓️</Text>
             <Text style={styles.emptyText}>No logs for selected filters.</Text>
           </View>
         ) : (
@@ -429,31 +653,35 @@ export default function LogsScreen() {
           ))
         )}
         <View style={{ height: 24 }} />
+      </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f7fa' },
+  container: { flex: 1, backgroundColor: '#ffffff' },
   header: {
-    backgroundColor: '#2c3e50',
-    paddingTop: 20,
-    paddingBottom: 16,
+    backgroundColor: '#ffffff',
+    paddingTop: 60,
+    paddingBottom: 20,
     paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  headerText: { fontSize: 24, fontWeight: '800', color: '#fff', marginBottom: 4 },
-  subHeaderText: { fontSize: 14, color: '#ecf0f1', fontWeight: '500' },
+  logo: { width: 40, height: 40, marginRight: 12, borderRadius: 8 },
+  headerText: { fontSize: 24, fontWeight: '700', color: '#111827', marginBottom: 4 },
+  subHeaderText: { fontSize: 14, color: '#6b7280', fontWeight: '500' },
 
-  filters: { padding: 16, gap: 12 },
+  filters: { padding: 16, gap: 12, backgroundColor: '#ffffff' },
   segment: { flexDirection: 'row', gap: 8 },
-  segmentBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: '#ffffff', borderWidth: 2, borderColor: '#e0e0e0', alignItems: 'center' },
-  segmentBtnActive: { backgroundColor: '#3498db', borderColor: '#3498db' },
+  segmentBtn: { flex: 1, paddingVertical: 10, borderRadius: 8, backgroundColor: '#f3f4f6', alignItems: 'center' },
+  segmentBtnActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
   segmentText: { fontSize: 13, fontWeight: '700', color: '#7f8c8d' },
   segmentTextActive: { color: '#fff' },
 
   chip: { paddingVertical: 8, paddingHorizontal: 12, backgroundColor: '#ffffff', borderRadius: 16, borderWidth: 2, borderColor: '#e0e0e0' },
-  chipActive: { backgroundColor: '#2ecc71', borderColor: '#2ecc71' },
+  chipActive: { backgroundColor: '#10b981', borderColor: '#10b981' },
   chipText: { fontSize: 12, fontWeight: '700', color: '#7f8c8d' },
   chipTextActive: { color: '#fff' },
 
@@ -476,6 +704,23 @@ const styles = StyleSheet.create({
     padding: 12,
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
   },
+  insightsCard: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 12,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
+  },
+  insightsTitle: { fontSize: 16, fontWeight: '800', color: '#111827', marginBottom: 8 },
+  sectionTitle: { fontSize: 13, fontWeight: '800', color: '#2c3e50', marginBottom: 6 },
+  sectionEmpty: { color: '#7f8c8d', fontSize: 12, marginBottom: 6 },
+  forecastPill: { paddingVertical: 8, paddingHorizontal: 10, backgroundColor: '#f3f4f6', borderRadius: 10, minWidth: 160 },
+  forecastDate: { fontSize: 11, color: '#6b7280', marginBottom: 2 },
+  forecastItem: { fontSize: 13, color: '#111827', fontWeight: '700' },
+  forecastQty: { fontSize: 12, color: '#2563eb', fontWeight: '800' },
+  activityRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, borderTopWidth: 1, borderTopColor: '#f0f0f0' },
+  activityText: { fontSize: 12, color: '#2c3e50' },
   analyticsTitle: { fontSize: 14, fontWeight: '800', color: '#2c3e50', marginBottom: 8 },
   analyticsEmpty: { color: '#7f8c8d', fontSize: 12 },
   analyticsRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderTopWidth: 1, borderTopColor: '#f0f0f0' },
@@ -483,17 +728,17 @@ const styles = StyleSheet.create({
   analyticsCount: { fontSize: 13, color: '#2c3e50', fontWeight: '800' },
 
   exportBar: { marginHorizontal: 16, marginTop: 10, flexDirection: 'row', gap: 10 },
-  exportBtn: { flex: 1, backgroundColor: '#34495e', paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
-  exportBtnDisabled: { backgroundColor: '#95a5a6' },
+  exportBtn: { flex: 1, backgroundColor: '#2563eb', paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
+  exportBtnDisabled: { backgroundColor: '#d1d5db' },
   exportBtnText: { color: '#fff', fontWeight: '800' },
   statItem: { alignItems: 'center', flex: 1 },
   statValue: { fontSize: 22, fontWeight: '800', color: '#2c3e50' },
+  statLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
   statLabel: { fontSize: 12, color: '#7f8c8d', fontWeight: '600' },
   statDivider: { width: 1, height: 36, backgroundColor: '#ecf0f1' },
 
   results: { flex: 1, paddingHorizontal: 16 },
   emptyState: { alignItems: 'center', paddingVertical: 60 },
-  emptyEmoji: { fontSize: 56, marginBottom: 12 },
   emptyText: { color: '#95a5a6', fontWeight: '600' },
 
   scheduleCard: {
@@ -515,4 +760,31 @@ const styles = StyleSheet.create({
   statusBadge: { marginLeft: 8, alignSelf: 'center', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 8, fontSize: 11, fontWeight: '800', overflow: 'hidden', color: '#fff' },
   statusDone: { backgroundColor: '#2ecc71' },
   statusPending: { backgroundColor: '#e67e22' },
+  topBar: {
+    paddingTop: 50,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+    backgroundColor: '#ffffff',
+  },
+  accessDenied: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  accessDeniedTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  accessDeniedText: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+  },
+  generateBtn: { backgroundColor: '#10b981', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 },
+  generateBtnDisabled: { backgroundColor: '#9ca3af' },
+  generateBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  sampleBtn: { backgroundColor: '#f59e0b', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 },
 });

@@ -1,0 +1,22 @@
+{
+  "name": "prepmaster-functions",
+  "version": "1.0.0",
+  "private": true,
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "clean": "rimraf lib",
+    "watch": "tsc -w -p ."
+  },
+  "engines": {
+    "node": "18"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.5.0",
+    "firebase-functions": "^4.7.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.2",
+    "rimraf": "^5.0.5"
+  }
+}

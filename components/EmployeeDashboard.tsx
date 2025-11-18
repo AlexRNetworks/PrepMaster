@@ -8,10 +8,14 @@ import {
   SafeAreaView,
   Alert,
   Modal,
-  TextInput
+  TextInput,
+  Image
 } from 'react-native';
 import { db } from '@/lib/firebase';
-import { collection, onSnapshot, orderBy, query, doc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, orderBy, query, doc, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useLocale } from '@/context/LocaleContext';
+import ProfileModal from '@/components/ProfileModal';
 
 type UserRole = 'IT_Admin' | 'Manager' | 'Employee';
 type Priority = 'high' | 'medium' | 'low';
@@ -30,11 +34,12 @@ interface PrepTask {
   id: number;
   name: string;
   qty: string;
-  status: 'Incomplete' | 'Complete';
+  status: 'Incomplete' | 'In Progress' | 'Complete';
   notes: string;
   priority: Priority;
   completedBy?: number;
   completedAt?: string;
+  startedAt?: string;
 }
 
 interface PrepSchedule {
@@ -55,12 +60,14 @@ interface EmployeeDashboardProps {
 }
 
 export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToUserManagement, onNavigateToPrepSchedule }: EmployeeDashboardProps) {
+  const { t } = useLocale();
   const [schedules, setSchedules] = useState<PrepSchedule[]>([]);
   const [scheduleDocIds, setScheduleDocIds] = useState<Record<number, string>>({});
   const [filter, setFilter] = useState<'all' | 'incomplete' | 'complete'>('all');
   const [incompleteModalVisible, setIncompleteModalVisible] = useState(false);
   const [selectedTask, setSelectedTask] = useState<{ scheduleId: number; taskId: number } | null>(null);
   const [incompleteReason, setIncompleteReason] = useState('');
+  const [profileModalVisible, setProfileModalVisible] = useState(false);
 
   // Subscribe to schedules from Firestore
   useEffect(() => {
@@ -99,19 +106,19 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
   }, [schedules, currentUser]);
 
   const allTasks = useMemo(() => 
-    mySchedules.flatMap(s => s.tasks.map(t => ({ ...t, scheduleId: s.id, scheduleDate: s.date }))),
+    mySchedules?.flatMap(s => s.tasks?.map(t => ({ ...t, scheduleId: s.id, scheduleDate: s.date })) || []) || [],
     [mySchedules]
   );
 
   const { completedCount, totalCount, completionRate, filteredTasks } = useMemo(() => {
-    const total = allTasks.length;
-    const completed = allTasks.filter((t: PrepTask) => t.status === 'Complete').length;
+    const total = allTasks?.length || 0;
+    const completed = allTasks?.filter((t: PrepTask) => t.status === 'Complete').length || 0;
     const rate = total > 0 ? Math.round((completed / total) * 100) : 0;
-    let filtered = allTasks;
+    let filtered = allTasks || [];
     if (filter === 'incomplete') {
-      filtered = allTasks.filter((t: PrepTask) => t.status === 'Incomplete');
+      filtered = (allTasks || []).filter((t: PrepTask) => t.status !== 'Complete');
     } else if (filter === 'complete') {
-      filtered = allTasks.filter((t: PrepTask) => t.status === 'Complete');
+      filtered = (allTasks || []).filter((t: PrepTask) => t.status === 'Complete');
     }
     return {
       completedCount: completed,
@@ -145,25 +152,25 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
   const handleSignOff = () => {
     if (completedCount === 0) {
       Alert.alert(
-        "No Tasks Completed",
-        "You haven't completed any tasks yet. Complete at least one task before signing off.",
+        t('noTasksCompleted'),
+        t('completeTasksFirst'),
         [{ text: "OK" }]
       );
       return;
     }
 
     Alert.alert(
-      "Confirm Sign Off",
-      `Submit ${completedCount} completed task${completedCount !== 1 ? 's' : ''} for ${currentUser.name}?`,
+      t('confirmSignOff'),
+      `${t('submit')} ${completedCount} ${t('completed')} ${t('task')}${completedCount !== 1 ? 's' : ''} for ${currentUser.name}?`,
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t('cancel'), style: "cancel" },
         { 
-          text: "Submit", 
+          text: t('submit'), 
           style: "default",
           onPress: () => {
-            Alert.alert("Success!", "Your tasks have been logged successfully.", [
-              { text: "OK" }
-            ]);
+            Alert.alert(t('success'), t('tasksLoggedSuccess'), [
+              { text: "OK" }]
+            );
           }
         }
       ]
@@ -177,20 +184,34 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
     const schedule = schedules.find(s => s.id === scheduleId);
     if (!schedule) return;
 
+    let toggledTask: PrepTask | null = null;
     const updatedTasks = schedule.tasks.map(t => {
       if (t.id === taskId) {
         if (currentStatus === 'Complete') {
           // Unchecking - mark as incomplete
           const { completedBy, completedAt, ...rest } = t;
+          toggledTask = { ...rest, status: 'Incomplete' } as PrepTask;
           return { ...rest, status: 'Incomplete' as const };
         } else {
           // Checking - mark as complete
-          return { 
+          const finishedAt = new Date();
+          let durationSeconds: number | undefined = undefined;
+          if (t.startedAt) {
+            try {
+              const started = new Date(t.startedAt);
+              durationSeconds = Math.max(0, Math.floor((finishedAt.getTime() - started.getTime()) / 1000));
+            } catch {}
+          }
+          const completed: PrepTask = { 
             ...t, 
-            status: 'Complete' as const,
+            status: 'Complete',
             completedBy: currentUser.id,
-            completedAt: new Date().toISOString()
-          };
+            completedAt: finishedAt.toISOString(),
+          } as PrepTask;
+          // Clear startedAt on completion
+          delete (completed as any).startedAt;
+          toggledTask = completed;
+          return completed as any;
         }
       }
       return t;
@@ -198,8 +219,62 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
 
     try {
       await updateDoc(doc(db, 'schedules', docId), { tasks: updatedTasks });
+      // Log prep action to Firestore
+      if (toggledTask) {
+        const action = currentStatus === 'Complete' ? 'reverted' : 'prepared';
+        try {
+          await addDoc(collection(db, 'prepLogs'), {
+            scheduleId,
+            scheduleDate: schedule.date,
+            taskId,
+            taskName: toggledTask.name,
+            qty: toggledTask.qty,
+            action,
+            userId: currentUser.id,
+            userName: currentUser.name,
+            createdAt: serverTimestamp(),
+            // Timing fields if applicable
+            ...(action === 'prepared' && schedule.tasks.find(t => t.id === taskId && t.startedAt) ? {
+              startedAt: schedule.tasks.find(t => t.id === taskId)?.startedAt,
+              finishedAt: new Date().toISOString(),
+              durationSeconds: (function() {
+                try {
+                  const started = new Date(schedule.tasks.find(t => t.id === taskId)?.startedAt as any);
+                  const finished = new Date();
+                  return Math.max(0, Math.floor((finished.getTime() - started.getTime()) / 1000));
+                } catch { return undefined; }
+              })(),
+            } : {}),
+          });
+        } catch (e) {
+          // Non-blocking: ignore logging errors
+        }
+      }
     } catch {
-      Alert.alert('Error', 'Failed to update task status');
+      Alert.alert(t('error'), t('failedUpdateTask'));
+    }
+  };
+
+  const handleStartTask = async (scheduleId: number, taskId: number) => {
+    const docId = scheduleDocIds[scheduleId];
+    if (!docId) return;
+    const schedule = schedules.find(s => s.id === scheduleId);
+    if (!schedule) return;
+
+    const updatedTasks = schedule.tasks.map(t => {
+      if (t.id === taskId) {
+        return {
+          ...t,
+          status: 'In Progress' as const,
+          startedAt: new Date().toISOString(),
+        };
+      }
+      return t;
+    });
+    try {
+      await updateDoc(doc(db, 'schedules', docId), { tasks: updatedTasks });
+    } catch {
+      Alert.alert(t('error'), t('failedUpdateTask'));
     }
   };
 
@@ -210,7 +285,7 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
 
   const handleSubmitIncompleteReason = async () => {
     if (!selectedTask || !incompleteReason.trim()) {
-      Alert.alert('Required', 'Please provide a reason for marking this task incomplete.');
+      Alert.alert(t('required'), t('provideIncompleteReason'));
       return;
     }
 
@@ -238,9 +313,9 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
       setIncompleteModalVisible(false);
       setIncompleteReason('');
       setSelectedTask(null);
-      Alert.alert('Success', 'Task marked as incomplete with reason.');
+      Alert.alert(t('success'), t('taskMarkedIncomplete'));
     } catch {
-      Alert.alert('Error', 'Failed to update task');
+      Alert.alert(t('error'), t('failedUpdateTask'));
     }
   };
 
@@ -259,47 +334,37 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
     return '#e74c3c';
   };
 
-  const getRoleIcon = (role: UserRole) => {
+  const getRoleDisplay = (role: UserRole) => {
     switch (role) {
-      case 'IT_Admin': return '⚡';
-      case 'Manager': return '👔';
-      case 'Employee': return '👤';
-      default: return '👤';
+      case 'IT_Admin': return t('itAdmin');
+      case 'Manager': return t('manager');
+      case 'Employee': return t('employee');
+      default: return t('employee');
     }
   };
 
+  // Early return if no current user (after all hooks)
+  if (!currentUser) {
+    return null;
+  }
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* Enhanced Header */}
-      <View style={styles.header}>
-        <View style={styles.headerTop}>
-          <View>
-            <Text style={styles.headerText}>PrepMaster Pro</Text>
-            <Text style={styles.subHeaderText}>
-              {getRoleIcon(currentUser.role)} {currentUser.name} ({currentUser.role})
-            </Text>
-          </View>
-          <TouchableOpacity 
-            style={styles.logoutButton} 
-            onPress={onLogout}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.logoutButtonText}>Logout</Text>
-          </TouchableOpacity>
-        </View>
-        <Text style={styles.dateText}>📅 {getCurrentDate()}</Text>
-        
-        {/* User Management Button (Only for Managers/IT Admins) */}
-        {isManagerOrAdmin && canManageUsers && (
-          <TouchableOpacity 
-            style={styles.userManagementButton} 
-            onPress={onNavigateToUserManagement}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.userManagementButtonText}>👥 User Management</Text>
-          </TouchableOpacity>
-        )}
+      {/* Simple Top Bar */}
+      <View style={styles.topBar}>
+        <Image source={{ uri: 'https://i.ibb.co/7tmLxCNZ/Purple-Minimalist-People-Profile-Logo-1.png' }} style={styles.logo} />
+        <TouchableOpacity 
+          style={styles.profileButton} 
+          onPress={() => setProfileModalVisible(true)}
+          activeOpacity={0.8}
+        >
+          <IconSymbol name="person.fill" size={24} color="#2563eb" />
+        </TouchableOpacity>
       </View>
+
+      <ScrollView style={styles.content}>
+        {/* Date Header */}
+        <Text style={styles.dateText}>{getCurrentDate()}</Text>
 
       {/* Progress Card with Circular Progress */}
       <View style={styles.progressSection}>
@@ -308,63 +373,70 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
             <Text style={[styles.progressPercentage, { color: getProgressColor() }]}>
               {completionRate}%
             </Text>
-            <Text style={styles.progressLabel}>Complete</Text>
+            <Text style={styles.progressLabel}>{t('complete')}</Text>
           </View>
           <View style={styles.progressStats}>
             <View style={styles.statItem}>
               <Text style={styles.statValue}>{completedCount}</Text>
-              <Text style={styles.statLabel}>✅ Done</Text>
+              <Text style={styles.statLabel}>{t('done')}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
               <Text style={styles.statValue}>{totalCount - completedCount}</Text>
-              <Text style={styles.statLabel}>⏳ Pending</Text>
+              <Text style={styles.statLabel}>{t('pending')}</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
               <Text style={styles.statValue}>{totalCount}</Text>
-              <Text style={styles.statLabel}>📋 Total</Text>
+              <Text style={styles.statLabel}>{t('total')}</Text>
             </View>
           </View>
         </View>
+      </View>
 
-        {/* Filter Buttons */}
-        <View style={styles.filterContainer}>
-          <TouchableOpacity 
-            style={[styles.filterButton, filter === 'all' && styles.filterButtonActive]}
-            onPress={() => setFilter('all')}
-          >
-            <Text style={[styles.filterButtonText, filter === 'all' && styles.filterButtonTextActive]}>
-              All ({totalCount})
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.filterButton, filter === 'incomplete' && styles.filterButtonActive]}
-            onPress={() => setFilter('incomplete')}
-          >
-            <Text style={[styles.filterButtonText, filter === 'incomplete' && styles.filterButtonTextActive]}>
-              Pending ({totalCount - completedCount})
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.filterButton, filter === 'complete' && styles.filterButtonActive]}
-            onPress={() => setFilter('complete')}
-          >
-            <Text style={[styles.filterButtonText, filter === 'complete' && styles.filterButtonTextActive]}>
-              Done ({completedCount})
-            </Text>
-          </TouchableOpacity>
-        </View>
+      {/* User Management Button (Only for Managers/IT Admins) */}
+      {isManagerOrAdmin && canManageUsers && (
+        <TouchableOpacity 
+          style={styles.userManagementButton} 
+          onPress={onNavigateToUserManagement}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.userManagementButtonText}>{t('manageUsers')}</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Filter Buttons */}
+      <View style={styles.filterContainer}>
+        <TouchableOpacity 
+          style={[styles.filterButton, filter === 'all' && styles.filterButtonActive]}
+          onPress={() => setFilter('all')}
+        >
+          <Text style={[styles.filterButtonText, filter === 'all' && styles.filterButtonTextActive]}>
+            {t('all')} ({totalCount})
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.filterButton, filter === 'incomplete' && styles.filterButtonActive]}
+          onPress={() => setFilter('incomplete')}
+        >
+          <Text style={[styles.filterButtonText, filter === 'incomplete' && styles.filterButtonTextActive]}>
+            {t('pending')} ({totalCount - completedCount})
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.filterButton, filter === 'complete' && styles.filterButtonActive]}
+          onPress={() => setFilter('complete')}
+        >
+          <Text style={[styles.filterButtonText, filter === 'complete' && styles.filterButtonTextActive]}>
+            {t('done')} ({completedCount})
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Task List */}
-      <ScrollView 
-        style={styles.taskListContainer}
-        showsVerticalScrollIndicator={false}
-      >
-        <Text style={styles.listTitle}>
-          {filter === 'all' ? 'All Tasks' : filter === 'incomplete' ? 'Pending Tasks' : 'Completed Tasks'}
-        </Text>
+      <Text style={styles.listTitle}>
+        {filter === 'all' ? t('allTasks') : filter === 'incomplete' ? t('pendingTasks') : t('completedTasks')}
+      </Text>
         {filteredTasks.map((task: any) => (
           <View
             key={`${task.scheduleId}-${task.id}`}
@@ -382,7 +454,9 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
                 styles.checkboxBox,
                 task.status === 'Complete' && styles.checkboxBoxChecked
               ]}>
-                {task.status === 'Complete' && <Text style={styles.checkmark}>✓</Text>}
+                {task.status === 'Complete' && (
+                  <IconSymbol name="checkmark.circle.fill" size={16} color="#ffffff" />
+                )}
               </View>
             </TouchableOpacity>
 
@@ -408,58 +482,74 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
                     {String(task.priority).toUpperCase()} PRIORITY
                   </Text>
                 )}
+                {task.status === 'In Progress' && (
+                  <Text style={styles.inProgressBadge}>{t('inProgress')}</Text>
+                )}
               </View>
             </View>
             
+            {/* Right-side controls */}
+            {task.status !== 'Complete' && (
+              <TouchableOpacity
+                style={styles.startButton}
+                onPress={() => task.status === 'In Progress' 
+                  ? handleToggleTask(task.scheduleId, task.id, task.status)
+                  : handleStartTask(task.scheduleId, task.id)}
+              >
+                <Text style={styles.startButtonText}>{task.status === 'In Progress' ? t('markComplete') : 'Start'}</Text>
+              </TouchableOpacity>
+            )}
             {/* Mark Incomplete Button - only show for completed tasks */}
             {task.status === 'Complete' && (
               <TouchableOpacity
                 style={styles.incompleteButton}
                 onPress={() => handleMarkIncomplete(task.scheduleId, task.id)}
               >
-                <Text style={styles.incompleteButtonText}>Mark Incomplete</Text>
+                <Text style={styles.incompleteButtonText}>{t('markIncomplete')}</Text>
               </TouchableOpacity>
             )}
           </View>
         ))}
         {filteredTasks.length === 0 && (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyStateEmoji}>
-              {mySchedules.length === 0 ? '📅' : '🎉'}
-            </Text>
+            <IconSymbol 
+              name={mySchedules.length === 0 ? 'calendar' : 'checkmark.circle.fill'} 
+              size={48} 
+              color="#9ca3af" 
+            />
             <Text style={styles.emptyStateText}>
               {mySchedules.length === 0 
-                ? 'No prep schedules assigned to you yet' 
+                ? t('noSchedulesAssigned') 
                 : filter === 'complete' 
-                  ? 'No completed tasks yet' 
-                  : 'No pending tasks'}
+                  ? t('noCompletedTasks') 
+                  : t('noPendingTasks')}
             </Text>
             {mySchedules.length === 0 && onNavigateToPrepSchedule && (
               <TouchableOpacity style={styles.emptyStateButton} onPress={onNavigateToPrepSchedule}>
-                <Text style={styles.emptyStateButtonText}>View All Schedules</Text>
+                <Text style={styles.emptyStateButtonText}>{t('viewAllSchedules')}</Text>
               </TouchableOpacity>
             )}
           </View>
         )}
         <View style={styles.bottomPadding} />
-      </ScrollView>
 
-      {/* Sign Off Button */}
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity 
-          style={[
-            styles.signOffButton,
-            completedCount === 0 && styles.signOffButtonDisabled
-          ]}
-          onPress={handleSignOff}
-          activeOpacity={0.8}
-          disabled={completedCount === 0}
-        >
-          <Text style={styles.signOffButtonText}>
-            ✓ Sign Off & Submit ({completedCount} Task{completedCount !== 1 ? 's' : ''})
-          </Text>
-        </TouchableOpacity>
-      </View>
+        {/* Sign Off Button */}
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity 
+            style={[
+              styles.signOffButton,
+              completedCount === 0 && styles.signOffButtonDisabled
+            ]}
+            onPress={handleSignOff}
+            activeOpacity={0.8}
+            disabled={completedCount === 0}
+          >
+            <Text style={styles.signOffButtonText}>
+              {t('signOffSubmit')} ({completedCount} {t('task')}{completedCount !== 1 ? 's' : ''})
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
 
       {/* Incomplete Reason Modal */}
       <Modal
@@ -470,14 +560,14 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Mark Task Incomplete</Text>
-            <Text style={styles.modalSubtitle}>Please provide a reason:</Text>
+            <Text style={styles.modalTitle}>{t('markTaskIncomplete')}</Text>
+            <Text style={styles.modalSubtitle}>{t('pleaseProvideReason')}</Text>
             
             <TextInput
               style={styles.modalInput}
               value={incompleteReason}
               onChangeText={setIncompleteReason}
-              placeholder="Enter reason..."
+              placeholder={t('enterReason')}
               multiline
               numberOfLines={4}
               textAlignVertical="top"
@@ -492,18 +582,29 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
                   setSelectedTask(null);
                 }}
               >
-                <Text style={styles.modalButtonTextCancel}>Cancel</Text>
+                <Text style={styles.modalButtonTextCancel}>{t('cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalButtonSubmit]}
                 onPress={handleSubmitIncompleteReason}
               >
-                <Text style={styles.modalButtonTextSubmit}>Submit</Text>
+                <Text style={styles.modalButtonTextSubmit}>{t('submit')}</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
+
+      {/* Profile Modal */}
+      <ProfileModal
+        visible={profileModalVisible}
+        onClose={() => setProfileModalVisible(false)}
+        user={currentUser}
+        onLogout={() => {
+          setProfileModalVisible(false);
+          onLogout();
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -511,69 +612,44 @@ export default function EmployeeDashboard({ onLogout, currentUser, onNavigateToU
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: '#ffffff',
   },
-  header: {
-    backgroundColor: '#2c3e50',
-    paddingTop: 20,
-    paddingBottom: 20,
-    paddingHorizontal: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  headerTop: {
+  topBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
+    alignItems: 'center',
+    paddingTop: 50,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+    backgroundColor: '#ffffff',
   },
-  headerText: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#ffffff',
-    marginBottom: 4,
+  logo: { width: 50, height: 50, borderRadius: 10 },
+  profileButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f3f4f6',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  subHeaderText: {
-    fontSize: 16,
-    color: '#ecf0f1',
-    fontWeight: '500',
+  content: {
+    flex: 1,
+    paddingHorizontal: 20,
   },
   dateText: {
-    fontSize: 13,
-    color: '#bdc3c7',
+    fontSize: 16,
+    color: '#6b7280',
     fontWeight: '500',
-    marginBottom: 12,
-  },
-  logoutButton: {
-    backgroundColor: '#e74c3c',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    shadowColor: '#e74c3c',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  logoutButtonText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
+    marginBottom: 20,
   },
   userManagementButton: {
-    backgroundColor: '#3498db',
-    paddingVertical: 12,
+    backgroundColor: '#2563eb',
+    paddingVertical: 14,
     paddingHorizontal: 20,
-    borderRadius: 10,
+    borderRadius: 12,
     alignItems: 'center',
-    shadowColor: '#3498db',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 3,
+    marginTop: 16,
+    marginBottom: 16,
   },
   userManagementButtonText: {
     color: '#ffffff',
@@ -644,19 +720,16 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 10,
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f3f4f6',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#e0e0e0',
   },
   filterButtonActive: {
-    backgroundColor: '#3498db',
-    borderColor: '#3498db',
+    backgroundColor: '#2563eb',
   },
   filterButtonText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#7f8c8d',
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6b7280',
   },
   filterButtonTextActive: {
     color: '#ffffff',
@@ -670,7 +743,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginTop: 8,
     marginBottom: 12,
-    color: '#2c3e50',
+    color: '#111827',
   },
   taskItem: {
     flexDirection: 'row',
@@ -708,7 +781,7 @@ const styles = StyleSheet.create({
   taskName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2c3e50',
+    color: '#111827',
     marginBottom: 4,
   },
   taskNameComplete: {
@@ -802,15 +875,12 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 6,
-    borderWidth: 2,
-    borderColor: '#95a5a6',
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
+    backgroundColor: '#f3f4f6',
   },
   checkboxBoxChecked: {
-    backgroundColor: '#2ecc71',
-    borderColor: '#2ecc71',
+    backgroundColor: '#10b981',
   },
   checkmark: {
     color: '#ffffff',
@@ -828,6 +898,24 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 12,
     fontWeight: '600',
+  },
+  startButton: {
+    backgroundColor: '#e0f2fe',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    marginLeft: 8,
+  },
+  startButtonText: {
+    color: '#0369a1',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  inProgressBadge: {
+    marginTop: 6,
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: '700',
   },
   modalOverlay: {
     flex: 1,
@@ -854,8 +942,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   modalInput: {
-    borderWidth: 1,
-    borderColor: '#ddd',
+    backgroundColor: '#f3f4f6',
     borderRadius: 8,
     padding: 12,
     fontSize: 16,

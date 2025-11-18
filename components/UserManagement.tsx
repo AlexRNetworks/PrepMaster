@@ -10,7 +10,10 @@ import {
   SafeAreaView,
   Modal,
   Switch,
+  Image,
 } from 'react-native';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useLocale } from '@/context/LocaleContext';
 import { db } from '@/lib/firebase';
 import {
   addDoc,
@@ -71,6 +74,7 @@ const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, string[]> = {
 
 // --- MAIN COMPONENT ---
 function UserManagement({ currentUser, onBack }: UserManagementProps) {
+  const { t } = useLocale();
   const [users, setUsers] = useState<User[]>([]);
   const [userDocIds, setUserDocIds] = useState<Record<number, string>>({});
   const [modalVisible, setModalVisible] = useState(false);
@@ -176,10 +180,15 @@ function UserManagement({ currentUser, onBack }: UserManagementProps) {
             active: true,
             createdAt: new Date().toISOString(),
           };
+          console.log('Creating new user:', newUser);
           await addDoc(collection(db, 'users'), { ...newUser, createdAt: serverTimestamp() });
           Alert.alert('Success', 'User added successfully!');
         }
         setModalVisible(false);
+        setFormName('');
+        setFormPin('');
+        setFormRole('Employee');
+        setEditingUser(null);
       } catch (e: any) {
         Alert.alert('Error', e?.message || 'Failed to save user');
       }
@@ -287,26 +296,37 @@ function UserManagement({ currentUser, onBack }: UserManagementProps) {
 
   const getRoleIcon = (role: UserRole) => {
     switch (role) {
-      case 'IT_Admin': return '⚡';
-      case 'Manager': return '👔';
-      case 'Employee': return '👤';
+      case 'IT_Admin': return 'bolt.fill';
+      case 'Manager': return 'briefcase.fill';
+      case 'Employee': return 'person.fill';
+    }
+  };
+
+  const getRoleDisplayName = (role: UserRole) => {
+    switch (role) {
+      case 'IT_Admin': return 'IT Admin';
+      case 'Manager': return 'Manager';
+      case 'Employee': return 'Employee';
     }
   };
 
   if (!canManageUsers) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
+        <View style={styles.topBar}>
+          <Image
+            source={{ uri: 'https://i.ibb.co/7tmLxCNZ/Purple-Minimalist-People-Profile-Logo-1.png' }}
+            style={styles.logo}
+          />
           <TouchableOpacity onPress={onBack} style={styles.backButton}>
             <Text style={styles.backButtonText}>← Back</Text>
           </TouchableOpacity>
-          <Text style={styles.headerText}>User Management</Text>
         </View>
         <View style={styles.accessDenied}>
-          <Text style={styles.accessDeniedEmoji}>🔒</Text>
-          <Text style={styles.accessDeniedText}>Access Denied</Text>
-          <Text style={styles.accessDeniedSubtext}>
-            You dont have permission to manage users.
+          <IconSymbol name="lock.fill" size={64} color="#ef4444" />
+          <Text style={styles.accessDeniedTitle}>Access Denied</Text>
+          <Text style={styles.accessDeniedText}>
+            You don&apos;t have permission to manage users.
           </Text>
         </View>
       </SafeAreaView>
@@ -315,17 +335,21 @@ function UserManagement({ currentUser, onBack }: UserManagementProps) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+      <View style={styles.topBar}>
+        <Image
+          source={{ uri: 'https://i.ibb.co/7tmLxCNZ/Purple-Minimalist-People-Profile-Logo-1.png' }}
+          style={styles.logo}
+        />
         <TouchableOpacity onPress={onBack} style={styles.backButton}>
           <Text style={styles.backButtonText}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.headerText}>User Management</Text>
-        <Text style={styles.subHeaderText}>
-          Logged in as: {currentUser.name} ({currentUser.role})
-        </Text>
       </View>
 
-      <View style={styles.statsCard}>
+      <View style={styles.content}>
+        <Text style={styles.pageTitle}>User Management</Text>
+        <Text style={styles.pageSubtitle}>Manage users, roles, and permissions</Text>
+
+        <View style={styles.statsCard}>
         <View style={styles.statItem}>
           <Text style={styles.statValue}>{users.length}</Text>
           <Text style={styles.statLabel}>Total Users</Text>
@@ -340,24 +364,26 @@ function UserManagement({ currentUser, onBack }: UserManagementProps) {
           <Text style={styles.statValue}>{users.filter(u => u.role === 'Manager').length}</Text>
           <Text style={styles.statLabel}>Managers</Text>
         </View>
-      </View>
-
-      <ScrollView style={styles.userList} showsVerticalScrollIndicator={false}>
-        <View style={styles.listHeader}>
-          <Text style={styles.listTitle}>All Users</Text>
-          <TouchableOpacity style={styles.addButton} onPress={handleAddUser}>
-            <Text style={styles.addButtonText}>+ Add User</Text>
-          </TouchableOpacity>
         </View>
 
-        {users.map(user => (
+        <ScrollView style={styles.userList} showsVerticalScrollIndicator={false}>
+          <View style={styles.listHeader}>
+            <Text style={styles.listTitle}>All Users</Text>
+            <TouchableOpacity style={styles.addButton} onPress={handleAddUser}>
+              <Text style={styles.addButtonText}>+ Add User</Text>
+            </TouchableOpacity>
+          </View>
+
+          {users.map(user => (
           <View
             key={user.id}
             style={[styles.userCard, !user.active && styles.userCardInactive]}
           >
             <View style={styles.userCardHeader}>
               <View style={styles.userInfo}>
-                <Text style={styles.userIcon}>{getRoleIcon(user.role)}</Text>
+                <View style={styles.userIconContainer}>
+                  <IconSymbol name={getRoleIcon(user.role)} size={24} color="#ffffff" />
+                </View>
                 <View>
                   <Text style={styles.userName}>{user.name}</Text>
                   <View style={styles.userMeta}>
@@ -409,26 +435,30 @@ function UserManagement({ currentUser, onBack }: UserManagementProps) {
                 style={styles.actionButton}
                 onPress={() => handleManagePermissions(user)}
               >
-                <Text style={styles.actionButtonText}>🔐 Permissions</Text>
+                <IconSymbol name="lock.fill" size={14} color="#ffffff" style={{ marginRight: 4 }} />
+                <Text style={styles.actionButtonText}>Permissions</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.actionButton}
                 onPress={() => handleEditUser(user)}
               >
-                <Text style={styles.actionButtonText}>✏️ Edit</Text>
+                <IconSymbol name="pencil" size={14} color="#ffffff" style={{ marginRight: 4 }} />
+                <Text style={styles.actionButtonText}>Edit</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.actionButton, styles.deleteButton]}
                 onPress={() => handleDeleteUser(user.id)}
               >
+                <IconSymbol name="trash" size={14} color="#ef4444" style={{ marginRight: 4 }} />
                 <Text style={[styles.actionButtonText, styles.deleteButtonText]}>
-                  🗑️ Delete
+                  Delete
                 </Text>
               </TouchableOpacity>
             </View>
           </View>
         ))}
-      </ScrollView>
+        </ScrollView>
+      </View>
 
       <Modal
         visible={modalVisible}
@@ -472,13 +502,18 @@ function UserManagement({ currentUser, onBack }: UserManagementProps) {
                     ]}
                     onPress={() => setFormRole(role)}
                   >
+                    <IconSymbol 
+                      name={getRoleIcon(role)} 
+                      size={18} 
+                      color={formRole === role ? '#2563eb' : '#6b7280'} 
+                    />
                     <Text
                       style={[
                         styles.roleOptionText,
                         formRole === role && styles.roleOptionTextSelected,
                       ]}
                     >
-                      {getRoleIcon(role)} {role}
+                      {getRoleDisplayName(role)}
                     </Text>
                   </TouchableOpacity>
                 )
@@ -580,63 +615,71 @@ function UserManagement({ currentUser, onBack }: UserManagementProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f7fa',
+    backgroundColor: '#ffffff',
+    paddingTop: 50,
   },
-  header: {
-    backgroundColor: '#2c3e50',
-    paddingTop: 20,
-    paddingBottom: 20,
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: '#ffffff',
+  },
+  logo: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   backButton: {
-    marginBottom: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#f3f4f6',
+    borderRadius: 8,
   },
   backButtonText: {
-    color: '#3498db',
     fontSize: 16,
-    fontWeight: '600',
-  },
-  headerText: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#ffffff',
-    marginBottom: 4,
-  },
-  subHeaderText: {
-    fontSize: 13,
-    color: '#bdc3c7',
+    color: '#2563eb',
     fontWeight: '500',
   },
+  content: {
+    flex: 1,
+    paddingHorizontal: 20,
+  },
+  pageTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#111827',
+    marginTop: 8,
+  },
+  pageSubtitle: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 4,
+    marginBottom: 20,
+  },
   statsCard: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+  },
+  statsRow: {
     flexDirection: 'row',
-    backgroundColor: '#ffffff',
-    margin: 16,
-    padding: 20,
-    borderRadius: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
+    justifyContent: 'space-around',
   },
   statItem: {
-    flex: 1,
     alignItems: 'center',
   },
-  statValue: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#2c3e50',
-    marginBottom: 4,
+  statNumber: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#111827',
   },
   statLabel: {
     fontSize: 12,
-    color: '#7f8c8d',
-    fontWeight: '600',
-  },
-  statDivider: {
-    width: 1,
-    backgroundColor: '#ecf0f1',
+    color: '#6b7280',
+    marginTop: 4,
   },
   listHeader: {
     flexDirection: 'row',
@@ -645,40 +688,29 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   listTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
-    color: '#2c3e50',
+    color: '#111827',
   },
   addButton: {
-    backgroundColor: '#2ecc71',
+    backgroundColor: '#10b981',
+    paddingHorizontal: 16,
     paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 10,
-    shadowColor: '#2ecc71',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 3,
+    borderRadius: 8,
   },
   addButtonText: {
     color: '#ffffff',
+    fontWeight: '600',
     fontSize: 14,
-    fontWeight: '700',
   },
   userList: {
     flex: 1,
-    paddingHorizontal: 16,
   },
   userCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 16,
+    borderRadius: 12,
     padding: 16,
     marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
   },
   userCardInactive: {
     opacity: 0.6,
@@ -694,15 +726,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
   },
-  userIcon: {
-    fontSize: 40,
+  userIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#2563eb',
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
   },
   userName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#2c3e50',
-    marginBottom: 4,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  userEmail: {
+    fontSize: 14,
+    color: '#6b7280',
+    marginTop: 2,
   },
   userMeta: {
     flexDirection: 'row',
@@ -710,27 +751,26 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   roleBadge: {
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6,
+    borderRadius: 12,
   },
   roleBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
     color: '#ffffff',
-    fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
   },
   userPin: {
     fontSize: 12,
-    color: '#7f8c8d',
+    color: '#6b7280',
     fontWeight: '600',
   },
   permissionsPreview: {
-    marginBottom: 12,
+    marginTop: 12,
   },
   permissionsLabel: {
     fontSize: 12,
-    color: '#7f8c8d',
+    color: '#6b7280',
     fontWeight: '600',
     marginBottom: 6,
   },
@@ -740,14 +780,14 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   permissionTag: {
-    backgroundColor: '#ecf0f1',
+    backgroundColor: '#f9fafb',
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 6,
   },
   permissionTagText: {
     fontSize: 11,
-    color: '#34495e',
+    color: '#6b7280',
     fontWeight: '600',
   },
   userActions: {
@@ -756,10 +796,12 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     flex: 1,
-    backgroundColor: '#3498db',
+    backgroundColor: '#2563eb',
     paddingVertical: 10,
     borderRadius: 8,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
   },
   actionButtonText: {
     color: '#ffffff',
@@ -767,10 +809,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   deleteButton: {
-    backgroundColor: '#ffebee',
+    backgroundColor: 'transparent',
   },
   deleteButtonText: {
-    color: '#e74c3c',
+    color: '#ef4444',
   },
   modalOverlay: {
     flex: 1,
@@ -788,30 +830,29 @@ const styles = StyleSheet.create({
     maxHeight: '80%',
   },
   modalTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#2c3e50',
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#111827',
     marginBottom: 4,
   },
   modalSubtitle: {
     fontSize: 14,
-    color: '#7f8c8d',
+    color: '#6b7280',
     marginBottom: 20,
   },
   inputLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#34495e',
+    color: '#111827',
     marginBottom: 8,
     marginTop: 12,
   },
   input: {
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderWidth: 0,
     borderRadius: 10,
     padding: 12,
     fontSize: 16,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#f9fafb',
   },
   roleSelector: {
     flexDirection: 'row',
@@ -821,22 +862,25 @@ const styles = StyleSheet.create({
   roleOption: {
     flex: 1,
     borderWidth: 2,
-    borderColor: '#e0e0e0',
+    borderColor: '#f3f4f6',
     borderRadius: 10,
     padding: 12,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
   },
   roleOptionSelected: {
-    borderColor: '#3498db',
-    backgroundColor: '#e3f2fd',
+    borderColor: '#2563eb',
+    backgroundColor: '#eff6ff',
   },
   roleOptionText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#7f8c8d',
+    color: '#6b7280',
   },
   roleOptionTextSelected: {
-    color: '#3498db',
+    color: '#2563eb',
   },
   permissionsList: {
     maxHeight: 400,
@@ -847,7 +891,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#ecf0f1',
+    borderBottomColor: '#f3f4f6',
   },
   permissionInfo: {
     flex: 1,
@@ -856,16 +900,16 @@ const styles = StyleSheet.create({
   permissionName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#2c3e50',
+    color: '#111827',
     marginBottom: 2,
   },
   permissionDescription: {
     fontSize: 12,
-    color: '#7f8c8d',
+    color: '#6b7280',
   },
   restrictedLabel: {
     fontSize: 10,
-    color: '#e74c3c',
+    color: '#ef4444',
     fontWeight: '700',
     marginTop: 4,
   },
@@ -881,15 +925,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cancelButton: {
-    backgroundColor: '#ecf0f1',
+    backgroundColor: '#f3f4f6',
   },
   cancelButtonText: {
-    color: '#7f8c8d',
+    color: '#6b7280',
     fontSize: 16,
     fontWeight: '700',
   },
   saveButton: {
-    backgroundColor: '#2ecc71',
+    backgroundColor: '#2563eb',
   },
   saveButtonText: {
     color: '#ffffff',
@@ -902,20 +946,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 40,
   },
-  accessDeniedEmoji: {
-    fontSize: 80,
-    marginBottom: 20,
+  accessDeniedTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    marginTop: 20,
   },
   accessDeniedText: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#e74c3c',
-    marginBottom: 8,
-  },
-  accessDeniedSubtext: {
-    fontSize: 16,
-    color: '#7f8c8d',
+    fontSize: 14,
+    color: '#6b7280',
     textAlign: 'center',
+    marginTop: 8,
   },
 });
 
